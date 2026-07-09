@@ -1,0 +1,14 @@
+# Swift / SwiftPM
+.build/
+*.xcodeproj
+.swiftpm/
+
+# Downloaded music (can be large)
+Music/
+
+# macOS
+.DS_Store
+
+# Tooling state
+.claude/
+.omc/
