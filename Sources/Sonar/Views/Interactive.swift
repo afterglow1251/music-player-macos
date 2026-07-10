@@ -42,6 +42,15 @@ extension View {
     /// Show a tidy custom tooltip above this view on hover (replaces the slow,
     /// native yellow `.help` tooltip with a Spotify-style one).
     func tooltip(_ text: String) -> some View { modifier(TooltipModifier(text: text)) }
+
+    /// Strip a `List` row down to look like our custom rows: no separator, no
+    /// background, tight insets — so a native (smoothly reorderable) List matches
+    /// the hand-styled look.
+    func plainListRow() -> some View {
+        self.listRowInsets(EdgeInsets(top: 1, leading: 6, bottom: 1, trailing: 6))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
 }
 
 private struct TooltipModifier: ViewModifier {
@@ -101,6 +110,18 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
+/// A 6-dot drag handle (2 columns × 3 rows), the affordance for reordering.
+struct DragDots: View {
+    var body: some View {
+        Grid(horizontalSpacing: 3, verticalSpacing: 2.5) {
+            ForEach(0..<3, id: \.self) { _ in
+                GridRow { dot; dot }
+            }
+        }
+    }
+    private var dot: some View { Circle().frame(width: 2.5, height: 2.5) }
+}
+
 /// One row in the library list. Highlights on hover and when it's the current
 /// track, so the playlist feels interactive.
 struct TrackRowView: View {
@@ -112,6 +133,18 @@ struct TrackRowView: View {
     let onPlayNext: () -> Void
     let onAddToQueue: () -> Void
     let onDelete: () -> Void
+    /// Whether the queue already has items. When empty, "Play Next" and "Add to
+    /// Queue" would do the same thing, so only "Play Next" is shown.
+    var queueHasItems: Bool = false
+    /// When set, a drag handle appears on hover and the row accepts drops. nil
+    /// disables reordering (e.g. while searching).
+    /// Non-nil enables the drag handle. `isDragging` lifts this row while it's the
+    /// one being dragged; the gesture callbacks report the cursor's y (in the
+    /// "reorder" coordinate space) so the parent can reorder by pure math.
+    var reorderID: String? = nil
+    var isDragging: Bool = false
+    var onReorderChanged: (CGFloat) -> Void = { _ in }
+    var onReorderEnded: () -> Void = {}
     private let accent = Theme.accent
 
     @State private var hovering = false
@@ -138,8 +171,27 @@ struct TrackRowView: View {
             // On hover show a trash button; otherwise the duration. Both live in a
             // fixed-width slot so nothing shifts; the button scales around its own
             // (small, centered) frame so it grows in place instead of drifting.
-            Group {
-                if hovering {
+            // Duration and the hover controls are both always in the layout (only
+            // their opacity changes), so nothing structurally appears/moves during
+            // a fast reorder — which was making the drag handle "fly" away.
+            ZStack(alignment: .trailing) {
+                Text(durationText)
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .opacity(hovering ? 0 : 1)
+                HStack(spacing: 8) {
+                    if reorderID != nil {
+                        DragDots()
+                            .foregroundStyle(.white.opacity(0.55))
+                            .frame(width: 11, height: 18)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(coordinateSpace: .named("reorder"))
+                                    .onChanged { onReorderChanged($0.location.y) }
+                                    .onEnded { _ in onReorderEnded() }
+                            )
+                            .help("Drag to reorder")
+                    }
                     Button(action: onDelete) {
                         Image(systemName: "trash")
                             .font(.system(size: 11))
@@ -148,24 +200,27 @@ struct TrackRowView: View {
                     }
                     .buttonStyle(PressableButtonStyle())
                     .help("Delete (move to Trash)")
-                } else {
-                    Text(durationText)
-                        .font(.system(size: 10, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.4))
                 }
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
             }
-            .frame(width: 44, alignment: .trailing)
+            .frame(width: reorderID == nil ? 44 : 58, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(background))
+        .scaleEffect(isDragging ? 1.02 : 1)
+        .shadow(color: isDragging ? .black.opacity(0.45) : .clear,
+                radius: isDragging ? 8 : 0, y: isDragging ? 4 : 0)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: onTap)
         .contextMenu {
             Button("Play", action: onTap)
             Button("Play Next", action: onPlayNext)
-            Button("Add to Queue", action: onAddToQueue)
+            if queueHasItems {
+                Button("Add to Queue", action: onAddToQueue)
+            }
             Divider()
             Button("Delete", role: .destructive, action: onDelete)
         }
@@ -173,8 +228,19 @@ struct TrackRowView: View {
     }
 
     private var background: Color {
+        if isDragging { return Color(white: 0.16) }
         if isCurrent { return accent.opacity(0.16) }
         return hovering ? .white.opacity(0.07) : .clear
+    }
+}
+
+/// Collects each reorderable row's frame (keyed by id) in the list's coordinate
+/// space, so a drag can compute the target index from cursor position — no
+/// hit-testing, no lag.
+struct RowFrameKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 
@@ -183,8 +249,11 @@ struct QueueRowView: View {
     let track: Track
     let position: Int
     let onRemove: () -> Void
+    var reorderID: String? = nil
+    var onDropReorder: (String) -> Void = { _ in }
 
     @State private var hovering = false
+    @State private var isDropTarget = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -197,26 +266,44 @@ struct QueueRowView: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .lineLimit(1)
             Spacer(minLength: 4)
-            // The button always occupies the slot (fades in on hover) so the row
-            // keeps a constant height and never shifts — same as the library rows.
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .frame(width: 20, height: 18)
+            HStack(spacing: 8) {
+                if let reorderID {
+                    DragDots()
+                        .foregroundStyle(.white.opacity(0.4))
+                        .frame(width: 11, height: 18)
+                        .contentShape(Rectangle())
+                        .draggable(reorderID)
+                        .help("Drag to reorder")
+                }
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 20, height: 18)
+                }
+                .buttonStyle(PressableButtonStyle())
+                .help("Remove from queue")
             }
-            .buttonStyle(PressableButtonStyle())
             .opacity(hovering ? 1 : 0)
             .allowsHitTesting(hovering)
-            .help("Remove from queue")
-            .frame(width: 24, alignment: .trailing)
+            .frame(width: reorderID == nil ? 24 : 42, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(hovering ? Color.white.opacity(0.06) : .clear))
+        .overlay(alignment: .top) {
+            if isDropTarget {
+                Capsule().fill(Theme.accent).frame(height: 2.5).padding(.horizontal, 6)
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .dropDestination(for: String.self) { items, _ in
+            guard let source = items.first, let id = reorderID, source != id else { return false }
+            onDropReorder(source)
+            return true
+        } isTargeted: { isDropTarget = $0 && reorderID != nil }
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

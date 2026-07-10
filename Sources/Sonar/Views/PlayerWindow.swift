@@ -12,6 +12,11 @@ struct PlayerWindow: View {
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
     @State private var seekHoverX: CGFloat?   // cursor x over the position slider
+    @State private var queueEndTargeted = false
+    // Gesture-driven library reorder (no system drag → no lag, no stray files).
+    @State private var libFrames: [String: CGRect] = [:]
+    @State private var libDragging: String?
+    @State private var libDragCursorY: CGFloat = 0
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var searchActive = false
@@ -84,7 +89,9 @@ struct PlayerWindow: View {
         )
         .overlay(alignment: .bottom) { errorToast }
         // Drag & drop audio files or a YouTube link onto the window.
-        .onDrop(of: [.fileURL, .url, .text], isTargeted: $isDropTargeted) { handleDrop($0) }
+        // Files & URLs only (not plain text) so an internal reorder drag doesn't
+        // trigger the window's drop highlight.
+        .onDrop(of: [.fileURL, .url], isTargeted: $isDropTargeted) { handleDrop($0) }
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 8).stroke(accent, lineWidth: 2).padding(4)
@@ -167,7 +174,9 @@ struct PlayerWindow: View {
         }
         .background(Color.black)
         .ignoresSafeArea()
-        .onDrop(of: [.fileURL, .url, .text], isTargeted: $isDropTargeted) { handleDrop($0) }
+        // Files & URLs only (not plain text) so an internal reorder drag doesn't
+        // trigger the window's drop highlight.
+        .onDrop(of: [.fileURL, .url], isTargeted: $isDropTargeted) { handleDrop($0) }
         .overlay(alignment: .bottom) { errorToast }
         // Esc: if a field/search is active, just dismiss it — only leave fullscreen
         // when nothing is focused (otherwise pressing Esc to clear a field would
@@ -342,18 +351,18 @@ struct PlayerWindow: View {
         // Spotify-style: plain icons, one big Play, shuffle/repeat inline, centered.
         HStack(spacing: 20) {
             Spacer(minLength: 0)
-            toggleIcon("shuffle", active: controller.shuffle, size: 13, help: "Shuffle") {
+            toggleIcon("shuffle", active: controller.shuffle, size: 15, help: "Shuffle") {
                 controller.shuffle.toggle()
             }
-            iconButton("backward.end", size: 17, help: "Previous  ⌘◀") { controller.previous() }
+            iconButton("backward.end", size: 15, help: "Previous  ⌘◀") { controller.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
             iconButton("gobackward.10", size: 15, help: "Back 10 seconds  ◀") { controller.seekBy(-10) }
             playButton
             iconButton("goforward.10", size: 15, help: "Forward 10 seconds  ▶") { controller.seekBy(10) }
-            iconButton("forward.end", size: 17, help: "Next  ⌘▶") { controller.next() }
+            iconButton("forward.end", size: 15, help: "Next  ⌘▶") { controller.next() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
             toggleIcon(controller.repeatMode == .one ? "repeat.1" : "repeat",
-                       active: controller.repeatMode != .off, size: 13, help: "Repeat") {
+                       active: controller.repeatMode != .off, size: 15, help: "Repeat") {
                 controller.cycleRepeat()
             }
             Spacer(minLength: 0)
@@ -375,11 +384,11 @@ struct PlayerWindow: View {
     }
 
     /// Plain transport icon — no background circle (Spotify-style).
-    private func iconButton(_ symbol: String, size: CGFloat, help: String,
-                            action: @escaping () -> Void) -> some View {
+    private func iconButton(_ symbol: String, size: CGFloat, weight: Font.Weight = .medium,
+                            help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: size, weight: .semibold))
+                .font(.system(size: size, weight: weight))
                 .foregroundStyle(.white.opacity(0.85))
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
@@ -393,7 +402,7 @@ struct PlayerWindow: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: size, weight: .semibold))
+                .font(.system(size: size, weight: .medium))
                 .foregroundStyle(active ? accent : .white.opacity(0.55))
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
@@ -575,34 +584,58 @@ struct PlayerWindow: View {
         .padding(.vertical, 2)
     }
 
+    /// A slim drop area below the last row so a track can be dragged to the very
+    /// end; shows the same accent line when a drag hovers it.
+    private func endDropZone(targeted: Binding<Bool>, onDrop: @escaping (String) -> Void) -> some View {
+        Color.clear
+            .frame(height: 16)
+            .overlay(alignment: .top) {
+                if targeted.wrappedValue {
+                    Capsule().fill(accent).frame(height: 2.5).padding(.horizontal, 6)
+                }
+            }
+            .dropDestination(for: String.self) { items, _ in
+                guard let source = items.first else { return false }
+                onDrop(source)
+                return true
+            } isTargeted: { targeted.wrappedValue = $0 }
+    }
+
     private func trackScroll(fixedHeight: CGFloat?) -> some View {
         ScrollView {
             LazyVStack(spacing: 2) {
-                // The queue lives at the top of this same fixed-height list, so it
-                // scrolls with the library and never grows the window. Hidden while
-                // searching to keep results clean.
+                // Queue lives at the top of the same list; hidden while searching.
                 if !controller.queue.isEmpty && !searchActive {
                     queueHeader
-                    ForEach(Array(controller.queue.enumerated()), id: \.offset) { index, track in
+                    ForEach(Array(controller.queue.enumerated()), id: \.element.id) { index, item in
                         QueueRowView(
-                            track: track,
+                            track: item.track,
                             position: index + 1,
                             onRemove: {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    controller.removeFromQueue(at: index)
-                                }
+                                withAnimation(.easeInOut(duration: 0.2)) { controller.removeFromQueue(item) }
+                            },
+                            reorderID: item.id.uuidString,
+                            onDropReorder: { source in
+                                guard let uid = UUID(uuidString: source) else { return }
+                                withAnimation(.easeInOut(duration: 0.2)) { controller.moveQueue(id: uid, before: item) }
                             }
                         )
                     }
+                    endDropZone(targeted: $queueEndTargeted) { source in
+                        guard let uid = UUID(uuidString: source) else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) { controller.moveQueueToEnd(id: uid) }
+                    }
                     Divider().overlay(Color.white.opacity(0.08))
-                        .padding(.horizontal, 4).padding(.vertical, 6)
+                        .padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 2)
                 }
+
                 if controller.library.tracks.isEmpty {
                     emptyMessage("Your library is empty — paste a URL or open a file")
                 } else if filteredTracks.isEmpty {
                     emptyMessage("No tracks match “\(searchText)”")
                 }
                 ForEach(filteredTracks) { track in
+                    let path = track.url.path
                     TrackRowView(
                         track: track,
                         isCurrent: controller.currentTrack == track,
@@ -611,15 +644,46 @@ struct PlayerWindow: View {
                         onTap: { controller.play(track) },
                         onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
                         onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
-                        onDelete: { controller.delete(track) }
+                        onDelete: { controller.delete(track) },
+                        queueHasItems: !controller.queue.isEmpty,
+                        // Reorder only when not searching.
+                        reorderID: searchText.isEmpty ? path : nil,
+                        isDragging: libDragging == path,
+                        onReorderChanged: { y in handleLibraryReorder(path: path, cursorY: y) },
+                        onReorderEnded: {
+                            controller.library.commitOrder()
+                            withAnimation(.easeInOut(duration: 0.18)) { libDragging = nil }
+                        }
                     )
+                    // The dragged row follows the cursor; its slot's midY drives the
+                    // offset so it stays glued to the finger as others shift.
+                    .offset(y: libDragging == path ? libDragCursorY - (libFrames[path]?.midY ?? libDragCursorY) : 0)
+                    .zIndex(libDragging == path ? 1 : 0)
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: RowFrameKey.self,
+                                               value: [path: proxy.frame(in: .named("reorder"))])
+                    })
                 }
             }
             .padding(.horizontal, 6).padding(.vertical, 6)
+            .coordinateSpace(.named("reorder"))
+            .onPreferenceChange(RowFrameKey.self) { libFrames = $0 }
         }
         .frame(height: fixedHeight)
         .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
         .scrollIndicators(.hidden)
+    }
+
+    /// Reorder the library live from the cursor's y position — pure math, so the
+    /// insertion never lags behind the finger.
+    private func handleLibraryReorder(path: String, cursorY: CGFloat) {
+        if libDragging != path { libDragging = path }
+        libDragCursorY = cursorY
+        let others = filteredTracks.filter { $0.url.path != path }
+        let target = others.filter { (libFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
+        if controller.library.tracks.firstIndex(where: { $0.url.path == path }) != target {
+            withAnimation(.easeInOut(duration: 0.18)) { controller.library.reorder(path: path, toIndex: target) }
+        }
     }
 
     private func emptyMessage(_ text: String) -> some View {

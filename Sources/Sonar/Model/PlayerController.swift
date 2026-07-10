@@ -5,6 +5,13 @@ enum RepeatMode: Int {
     case off = 0, all, one
 }
 
+/// One entry in the play queue. The stable `id` lets the same track sit in the
+/// queue more than once and keeps drag-reorder animations smooth.
+struct QueueItem: Identifiable, Hashable {
+    let id = UUID()
+    var track: Track
+}
+
 enum SleepMode: Equatable {
     case off
     case timer(minutes: Int)
@@ -25,8 +32,9 @@ final class PlayerController: ObservableObject {
     @Published var urlInput: String = ""
 
     /// Tracks the user lined up to play next, overriding the normal library order.
-    /// Ephemeral (not persisted) — like Winamp's play queue.
-    @Published private(set) var queue: [Track] = []
+    /// Ephemeral (not persisted) — like Winamp's play queue. Each entry has a
+    /// stable id so the same track can appear twice and drag-reorder stays smooth.
+    @Published private(set) var queue: [QueueItem] = []
 
     @Published var shuffle = false { didSet { save() } }
     @Published var repeatMode: RepeatMode = .off { didSet { save() } }
@@ -122,7 +130,7 @@ final class PlayerController: ObservableObject {
         if auto, repeatMode == .one, let track = currentTrack { play(track); return }
 
         // The queue overrides the normal order: play what the user lined up next.
-        if !queue.isEmpty { play(queue.removeFirst()); return }
+        if !queue.isEmpty { play(queue.removeFirst().track); return }
 
         guard !library.tracks.isEmpty else { return }
         guard let index = currentIndex else { play(library.tracks[0]); return }
@@ -156,21 +164,31 @@ final class PlayerController: ObservableObject {
             currentTrack = nil
             updateNowPlaying()
         }
-        queue.removeAll { $0 == track }
+        queue.removeAll { $0.track == track }
         library.delete(track)
     }
 
     // MARK: Queue
 
     /// Insert a track at the front of the queue — it plays right after the current one.
-    func playNext(_ track: Track) { queue.insert(track, at: 0) }
+    func playNext(_ track: Track) { queue.insert(QueueItem(track: track), at: 0) }
 
     /// Append a track to the end of the queue.
-    func addToQueue(_ track: Track) { queue.append(track) }
+    func addToQueue(_ track: Track) { queue.append(QueueItem(track: track)) }
 
-    func removeFromQueue(at index: Int) {
-        guard queue.indices.contains(index) else { return }
-        queue.remove(at: index)
+    func removeFromQueue(_ item: QueueItem) { queue.removeAll { $0.id == item.id } }
+
+    /// Drag-and-drop reorder: move the item with `id` to sit just before `target`.
+    func moveQueue(id: UUID, before target: QueueItem) {
+        guard let from = queue.firstIndex(where: { $0.id == id }), queue[from].id != target.id else { return }
+        let item = queue.remove(at: from)
+        let insertAt = queue.firstIndex(of: target) ?? queue.count
+        queue.insert(item, at: insertAt)
+    }
+
+    func moveQueueToEnd(id: UUID) {
+        guard let from = queue.firstIndex(where: { $0.id == id }), from != queue.count - 1 else { return }
+        queue.append(queue.remove(at: from))
     }
 
     func clearQueue() { queue.removeAll() }

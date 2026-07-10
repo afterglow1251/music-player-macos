@@ -4,6 +4,9 @@ import AppKit
 /// The user's music library. Lives in a normal, Finder-reachable folder
 /// (default `~/Documents/Sonar/`, changeable in Settings) and watches that
 /// folder so files added/removed in Finder show up without a restart.
+///
+/// Order is fully manual: drag to arrange, and it persists. Files not yet in the
+/// saved order (e.g. a fresh download) sort in alphabetically at the end.
 @MainActor
 final class MusicLibrary: ObservableObject {
     @Published private(set) var tracks: [Track] = []
@@ -44,7 +47,7 @@ final class MusicLibrary: ObservableObject {
         for url in audioURLs {
             loaded.append(await Track.load(from: url))
         }
-        tracks = sorted(loaded)
+        tracks = ordered(loaded)
     }
 
     /// Add a single freshly-downloaded file without rescanning everything.
@@ -54,10 +57,57 @@ final class MusicLibrary: ObservableObject {
         if let existing = tracks.firstIndex(of: track) {
             tracks[existing] = track
         } else {
-            tracks = sorted(tracks + [track])
+            tracks = ordered(tracks + [track])
         }
         return track
     }
+
+    // MARK: Manual order
+
+    /// Reorder by index (SwiftUI `.onMove` semantics).
+    func move(fromOffsets: IndexSet, toOffset: Int) {
+        var updated = tracks
+        updated.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        applyManual(updated)
+    }
+
+    /// Move the track with `path` to sit just before `target` (drag-and-drop).
+    func move(path: String, before target: Track) {
+        guard let from = tracks.firstIndex(where: { $0.url.path == path }),
+              tracks[from] != target else { return }
+        var updated = tracks
+        let item = updated.remove(at: from)
+        let insertAt = updated.firstIndex(of: target) ?? updated.count
+        updated.insert(item, at: insertAt)
+        applyManual(updated)
+    }
+
+    /// Move the track with `path` to the very end (drop past the last row).
+    func moveToEnd(path: String) {
+        guard let from = tracks.firstIndex(where: { $0.url.path == path }), from != tracks.count - 1 else { return }
+        var updated = tracks
+        updated.append(updated.remove(at: from))
+        applyManual(updated)
+    }
+
+    private func applyManual(_ list: [Track]) {
+        tracks = list
+        prefs.libraryOrder = list.map(\.url.path)
+    }
+
+    /// Live reorder while a drag is in progress — moves the track with `path` to
+    /// `index`. Cheap: mutates the in-memory order only; call `commitOrder()` on
+    /// drop to persist (so we don't hammer UserDefaults every frame).
+    func reorder(path: String, toIndex index: Int) {
+        guard let from = tracks.firstIndex(where: { $0.url.path == path }) else { return }
+        var updated = tracks
+        let item = updated.remove(at: from)
+        updated.insert(item, at: min(max(index, 0), updated.count))
+        if updated.map(\.url.path) != tracks.map(\.url.path) { tracks = updated }
+    }
+
+    /// Persist the current order once a drag finishes.
+    func commitOrder() { prefs.libraryOrder = tracks.map(\.url.path) }
 
     /// Move a track's file to the Trash and drop it from the library.
     func delete(_ track: Track) {
@@ -134,8 +184,23 @@ final class MusicLibrary: ObservableObject {
         }
     }
 
-    private func sorted(_ list: [Track]) -> [Track] {
-        list.sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
+    /// Reconcile a list with the saved manual order: known files keep their saved
+    /// position, new files sort in alphabetically at the end, and the merged order
+    /// is persisted.
+    private func ordered(_ list: [Track]) -> [Track] {
+        let position = Dictionary(prefs.libraryOrder.enumerated().map { ($1, $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        let sorted = list.sorted { a, b in
+            switch (position[a.url.path], position[b.url.path]) {
+            case let (x?, y?): return x < y
+            case (_?, nil): return true                    // known before new files
+            case (nil, _?): return false
+            case (nil, nil):
+                return a.displayTitle.localizedCaseInsensitiveCompare(b.displayTitle) == .orderedAscending
+            }
+        }
+        prefs.libraryOrder = sorted.map(\.url.path)
+        return sorted
     }
 
     // MARK: Folder resolution & migration
