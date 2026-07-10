@@ -78,10 +78,10 @@ struct SettingsView: View {
     private func sleepChip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(active ? .black : .white.opacity(0.7))
-                .padding(.horizontal, 9).padding(.vertical, 5)
-                .background(Capsule().fill(active ? accent : .white.opacity(0.06)))
+                .font(.system(size: 11, weight: active ? .semibold : .medium))
+                .foregroundStyle(active ? accent : .white.opacity(0.55))
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
     }

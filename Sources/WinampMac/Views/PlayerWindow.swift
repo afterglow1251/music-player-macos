@@ -11,6 +11,7 @@ struct PlayerWindow: View {
     @State private var scrubTime: TimeInterval = 0
     @State private var showSettings = false
     @State private var searchText = ""
+    @State private var searchActive = false
     @State private var isDropTargeted = false
     /// Decoded once per track (not per frame) so the breathing animation doesn't
     /// re-decode the artwork 30×/sec.
@@ -42,10 +43,9 @@ struct PlayerWindow: View {
             visualizerStrip
             positionSlider
             transportRow
-            secondaryRow
+            utilityRow
             downloadBar
-            if !controller.library.tracks.isEmpty { searchField }
-            trackList
+            librarySection
         }
         .padding(16)
         .frame(width: contentWidth + 32)
@@ -63,8 +63,16 @@ struct PlayerWindow: View {
                 RoundedRectangle(cornerRadius: 8).stroke(accent, lineWidth: 2).padding(4)
             }
         }
-        // Escape removes the cursor from the URL field.
-        .onExitCommand { dismissFocus() }
+        // Escape: close the search if it's open, otherwise just drop the cursor.
+        .onExitCommand {
+            if searchActive {
+                withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
+                searchText = ""
+                searchFieldFocused = false
+            } else {
+                dismissFocus()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .toggleSettings)) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
         }
@@ -196,33 +204,23 @@ struct PlayerWindow: View {
     // MARK: Transport
 
     private var transportRow: some View {
-        HStack(spacing: 12) {
+        // Spotify-style: plain icons, one big Play, shuffle/repeat inline, centered.
+        HStack(spacing: 20) {
             Spacer(minLength: 0)
-
-            iconButton("folder", size: 15, help: "Open file") { openFile() }
-            iconButton("stop.fill", size: 14, help: "Stop (⌘.)") { engine.stop() }
-                .keyboardShortcut(".", modifiers: .command)
-            iconButton("backward.fill", size: 16, help: "Previous (⌘←)") { controller.previous() }
+            toggleIcon("shuffle", active: controller.shuffle, size: 13, help: "Shuffle") {
+                controller.shuffle.toggle()
+            }
+            iconButton("backward.fill", size: 17, help: "Previous (⌘←)") { controller.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
             iconButton("gobackward.10", size: 15, help: "Back 10s (⌥←)") { controller.seekBy(-10) }
             playButton
             iconButton("goforward.10", size: 15, help: "Forward 10s (⌥→)") { controller.seekBy(10) }
-            iconButton("forward.fill", size: 16, help: "Next (⌘→)") { controller.next() }
+            iconButton("forward.fill", size: 17, help: "Next (⌘→)") { controller.next() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
-
-            Button { engine.toggleMute() } label: {
-                Image(systemName: engine.isMuted ? "speaker.slash.fill" : "speaker.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(engine.isMuted ? .red.opacity(0.85) : .white.opacity(0.5))
-                    .frame(width: 16, height: 16)
+            toggleIcon(controller.repeatMode == .one ? "repeat.1" : "repeat",
+                       active: controller.repeatMode != .off, size: 13, help: "Repeat") {
+                controller.cycleRepeat()
             }
-            .buttonStyle(PressableButtonStyle())
-            .help(engine.isMuted ? "Unmute" : "Mute")
-            Slider(value: Binding(get: { engine.volume }, set: { engine.volume = $0 }), in: 0...1)
-                .controlSize(.mini)
-                .tint(accent)
-                .frame(width: 56)
-
             Spacer(minLength: 0)
         }
     }
@@ -241,31 +239,52 @@ struct PlayerWindow: View {
         .keyboardShortcut(.space, modifiers: [])
     }
 
+    /// Plain transport icon — no background circle (Spotify-style).
     private func iconButton(_ symbol: String, size: CGFloat, help: String,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(.white.opacity(0.08)))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
         .help(help)
     }
 
-    // MARK: Secondary controls (shuffle / repeat / theme / EQ)
+    /// Toggle icon (shuffle/repeat) — green when active, gray when off.
+    private func toggleIcon(_ symbol: String, active: Bool, size: CGFloat, help: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(active ? accent : .white.opacity(0.55))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .help(help)
+    }
 
-    private var secondaryRow: some View {
-        HStack(spacing: 10) {
-            chip(icon: "shuffle", active: controller.shuffle, help: "Shuffle") {
-                controller.shuffle.toggle()
-            }
-            chip(icon: controller.repeatMode == .one ? "repeat.1" : "repeat",
-                 active: controller.repeatMode != .off, help: "Repeat") {
-                controller.cycleRepeat()
-            }
+    // MARK: Utility row (open file + volume — de-emphasized)
+
+    private var utilityRow: some View {
+        HStack(spacing: 8) {
+            iconButton("folder", size: 13, help: "Open file") { openFile() }
             Spacer()
+            Button { engine.toggleMute() } label: {
+                Image(systemName: engine.isMuted ? "speaker.slash.fill" : "speaker.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(engine.isMuted ? .red.opacity(0.8) : .white.opacity(0.45))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(PressableButtonStyle())
+            .help(engine.isMuted ? "Unmute" : "Mute")
+            Slider(value: Binding(get: { engine.volume }, set: { engine.volume = $0 }), in: 0...1)
+                .controlSize(.mini)
+                .tint(accent)
+                .frame(width: 96)
         }
     }
 
@@ -279,18 +298,10 @@ struct PlayerWindow: View {
                 sleepBadge("track end")
             }
             Spacer()
-            Button {
+            toggleIcon("slider.horizontal.3", active: showSettings, size: 15,
+                       help: "Settings — theme & equalizer (⌘,)") {
                 withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(showSettings ? .black : .white.opacity(0.75))
-                    .frame(width: 32, height: 24)
-                    .background(RoundedRectangle(cornerRadius: 7)
-                        .fill(showSettings ? accent : .white.opacity(0.08)))
             }
-            .buttonStyle(PressableButtonStyle())
-            .help("Settings — theme & equalizer (⌘,)")
         }
         .frame(height: 24)
     }
@@ -303,34 +314,92 @@ struct PlayerWindow: View {
         .foregroundStyle(accent)
     }
 
-    private func chip(icon: String, active: Bool, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(active ? .black : .white.opacity(0.7))
-                .frame(width: 32, height: 26)
-                .background(RoundedRectangle(cornerRadius: 7).fill(active ? accent : .white.opacity(0.06)))
+    // MARK: Library section (header with expandable search + track list)
+
+    private var librarySection: some View {
+        VStack(spacing: 0) {
+            libraryHeader
+            Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6)
+            trackScroll
         }
-        .buttonStyle(PressableButtonStyle())
-        .help(help)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.06)))
     }
 
-    // MARK: Search
-
-    private var searchField: some View {
+    private var libraryHeader: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-            SteadyTextField(placeholder: "Search library…",
-                            text: $searchText,
-                            focus: $searchFieldFocused)
-            if !searchText.isEmpty {
-                Button { searchText = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(.white.opacity(0.4))
-                }.buttonStyle(.plain)
+            if searchActive {
+                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                SteadyTextField(placeholder: "Search…", text: $searchText, focus: $searchFieldFocused)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
+                    searchText = ""
+                    searchFieldFocused = false
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 20, height: 20).contentShape(Rectangle())
+                }
+                .buttonStyle(PressableButtonStyle())
+            } else {
+                Text("LIBRARY")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                Text("\(controller.library.tracks.count)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.3))
+                Spacer()
+                if !controller.library.tracks.isEmpty {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { searchActive = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFieldFocused = true }
+                    } label: {
+                        Image(systemName: "magnifyingglass").font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Search")
+                }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(Capsule().fill(.white.opacity(0.06)))
+        .frame(height: 24)
+        .padding(.horizontal, 10)
+        .padding(.top, 8).padding(.bottom, 4)
+    }
+
+    private var trackScroll: some View {
+        ScrollView {
+            LazyVStack(spacing: 2) {
+                if controller.library.tracks.isEmpty {
+                    emptyMessage("Your library is empty — paste a URL or open a file")
+                } else if filteredTracks.isEmpty {
+                    emptyMessage("No tracks match “\(searchText)”")
+                }
+                ForEach(filteredTracks) { track in
+                    TrackRowView(
+                        track: track,
+                        isCurrent: controller.currentTrack == track,
+                        isPlaying: engine.isPlaying,
+                        accent: accent,
+                        durationText: timeString(track.duration),
+                        onTap: { controller.play(track) },
+                        onDelete: { controller.delete(track) }
+                    )
+                }
+            }
+            .padding(.horizontal, 6).padding(.vertical, 6)
+        }
+        .frame(height: 168)
+        .scrollIndicators(.hidden)
+    }
+
+    private func emptyMessage(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(0.4))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 14).padding(.horizontal, 4)
     }
 
     // MARK: Error toast
@@ -400,40 +469,6 @@ struct PlayerWindow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-    }
-
-    // MARK: Track list (library / playlist)
-
-    private var trackList: some View {
-        ScrollView {
-            LazyVStack(spacing: 2) {
-                if controller.library.tracks.isEmpty {
-                    Text("Your library is empty — paste a URL or open a file")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.4))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 14)
-                        .padding(.horizontal, 4)
-                }
-                ForEach(filteredTracks) { track in
-                    TrackRowView(
-                        track: track,
-                        isCurrent: controller.currentTrack == track,
-                        isPlaying: engine.isPlaying,
-                        accent: accent,
-                        durationText: timeString(track.duration),
-                        onTap: { controller.play(track) },
-                        onDelete: { controller.delete(track) }
-                    )
-                }
-            }
-            .padding(6)
-        }
-        .frame(height: 168)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(Color.white.opacity(0.06)))
     }
 
     // MARK: Now-playing text
