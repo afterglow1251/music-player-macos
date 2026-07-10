@@ -375,9 +375,53 @@ struct PlayerWindow: View {
         .padding(.top, 8).padding(.bottom, 4)
     }
 
+    /// Compact "UP NEXT" header shown at the top of the track list when queued.
+    private var queueHeader: some View {
+        HStack(spacing: 8) {
+            Text("UP NEXT")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(accent.opacity(0.85))
+            Text("\(controller.queue.count)")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.3))
+            Spacer()
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { controller.clearQueue() }
+            } label: {
+                Text("Clear")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
+            .help("Clear the queue")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+    }
+
     private var trackScroll: some View {
         ScrollView {
             LazyVStack(spacing: 2) {
+                // The queue lives at the top of this same fixed-height list, so it
+                // scrolls with the library and never grows the window. Hidden while
+                // searching to keep results clean.
+                if !controller.queue.isEmpty && !searchActive {
+                    queueHeader
+                    ForEach(Array(controller.queue.enumerated()), id: \.offset) { index, track in
+                        QueueRowView(
+                            track: track,
+                            position: index + 1,
+                            onRemove: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    controller.removeFromQueue(at: index)
+                                }
+                            }
+                        )
+                    }
+                    Divider().overlay(Color.white.opacity(0.08))
+                        .padding(.horizontal, 4).padding(.vertical, 6)
+                }
                 if controller.library.tracks.isEmpty {
                     emptyMessage("Your library is empty — paste a URL or open a file")
                 } else if filteredTracks.isEmpty {
@@ -390,6 +434,8 @@ struct PlayerWindow: View {
                         isPlaying: engine.isPlaying,
                         durationText: timeString(track.duration),
                         onTap: { controller.play(track) },
+                        onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
+                        onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
                         onDelete: { controller.delete(track) }
                     )
                 }

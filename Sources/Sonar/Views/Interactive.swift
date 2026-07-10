@@ -57,6 +57,8 @@ struct TrackRowView: View {
     let isPlaying: Bool
     let durationText: String
     let onTap: () -> Void
+    let onPlayNext: () -> Void
+    let onAddToQueue: () -> Void
     let onDelete: () -> Void
     private let accent = Theme.accent
 
@@ -110,6 +112,9 @@ struct TrackRowView: View {
         .onTapGesture(perform: onTap)
         .contextMenu {
             Button("Play", action: onTap)
+            Button("Play Next", action: onPlayNext)
+            Button("Add to Queue", action: onAddToQueue)
+            Divider()
             Button("Delete", role: .destructive, action: onDelete)
         }
         .animation(.easeOut(duration: 0.12), value: hovering)
@@ -118,5 +123,48 @@ struct TrackRowView: View {
     private var background: Color {
         if isCurrent { return accent.opacity(0.16) }
         return hovering ? .white.opacity(0.07) : .clear
+    }
+}
+
+/// One row in the "Up Next" queue — compact, numbered, with a remove button on hover.
+struct QueueRowView: View {
+    let track: Track
+    let position: Int
+    let onRemove: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(position)")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+                .frame(width: 16)
+            Text(track.displayTitle)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            // The button always occupies the slot (fades in on hover) so the row
+            // keeps a constant height and never shifts — same as the library rows.
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 20, height: 18)
+            }
+            .buttonStyle(PressableButtonStyle())
+            .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering)
+            .help("Remove from queue")
+            .frame(width: 24, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(hovering ? Color.white.opacity(0.06) : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

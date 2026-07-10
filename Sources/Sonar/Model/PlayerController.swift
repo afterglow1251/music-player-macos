@@ -24,6 +24,10 @@ final class PlayerController: ObservableObject {
     @Published private(set) var currentTrack: Track?
     @Published var urlInput: String = ""
 
+    /// Tracks the user lined up to play next, overriding the normal library order.
+    /// Ephemeral (not persisted) — like Winamp's play queue.
+    @Published private(set) var queue: [Track] = []
+
     @Published var shuffle = false { didSet { save() } }
     @Published var repeatMode: RepeatMode = .off { didSet { save() } }
     @Published var themeIndex = 0 { didSet { save() } }
@@ -115,9 +119,12 @@ final class PlayerController: ObservableObject {
             setSleep(.off)
             return
         }
-        guard !library.tracks.isEmpty else { return }
         if auto, repeatMode == .one, let track = currentTrack { play(track); return }
 
+        // The queue overrides the normal order: play what the user lined up next.
+        if !queue.isEmpty { play(queue.removeFirst()); return }
+
+        guard !library.tracks.isEmpty else { return }
         guard let index = currentIndex else { play(library.tracks[0]); return }
 
         if shuffle {
@@ -149,8 +156,24 @@ final class PlayerController: ObservableObject {
             currentTrack = nil
             updateNowPlaying()
         }
+        queue.removeAll { $0 == track }
         library.delete(track)
     }
+
+    // MARK: Queue
+
+    /// Insert a track at the front of the queue — it plays right after the current one.
+    func playNext(_ track: Track) { queue.insert(track, at: 0) }
+
+    /// Append a track to the end of the queue.
+    func addToQueue(_ track: Track) { queue.append(track) }
+
+    func removeFromQueue(at index: Int) {
+        guard queue.indices.contains(index) else { return }
+        queue.remove(at: index)
+    }
+
+    func clearQueue() { queue.removeAll() }
 
     private var currentIndex: Int? {
         guard let track = currentTrack else { return nil }
