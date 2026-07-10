@@ -12,6 +12,9 @@ struct PlayerWindow: View {
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var isDropTargeted = false
+    /// Decoded once per track (not per frame) so the breathing animation doesn't
+    /// re-decode the artwork 30×/sec.
+    @State private var artworkImage: NSImage?
     @FocusState private var urlFieldFocused: Bool
     @FocusState private var searchFieldFocused: Bool
 
@@ -84,9 +87,13 @@ struct PlayerWindow: View {
         }
         // Don't let the URL field grab the cursor on launch.
         .onAppear {
+            decodeArtwork(controller.currentTrack)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
+        }
+        .onChange(of: controller.currentTrack) { _, track in
+            decodeArtwork(track)
         }
     }
 
@@ -101,8 +108,9 @@ struct PlayerWindow: View {
     // MARK: Hero artwork (whole photo, never cropped)
 
     private var heroArt: some View {
-        // The artwork gently "breathes" with the bass while playing.
-        TimelineView(.animation) { _ in
+        // The artwork gently "breathes" with the bass while playing (capped at
+        // 30fps, and stopped when paused so it doesn't spin the CPU while idle).
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying)) { _ in
             // bassLevel eases to 0 when paused, so the scale glides back to 1
             // smoothly instead of snapping.
             let bass = CGFloat(min(max(engine.analyzer.bassLevel, 0), 1))
@@ -117,7 +125,7 @@ struct PlayerWindow: View {
 
     private var artworkContent: some View {
         ZStack {
-            if let data = controller.currentTrack?.artworkData, let image = NSImage(data: data) {
+            if let image = artworkImage {
                 // Photo FILLS the whole box edge-to-edge (no bands); overflow clipped.
                 Image(nsImage: image)
                     .resizable()
@@ -493,6 +501,10 @@ struct PlayerWindow: View {
     private func dismissFocus() {
         urlFieldFocused = false
         searchFieldFocused = false
+    }
+
+    private func decodeArtwork(_ track: Track?) {
+        artworkImage = track?.artworkData.flatMap { NSImage(data: $0) }
     }
 
     private func timeString(_ t: TimeInterval) -> String {

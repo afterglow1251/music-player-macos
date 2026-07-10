@@ -20,7 +20,9 @@ struct VisualizerView: View {
     private let tileGap: CGFloat = 1 // 1px gap => the "tiles" look
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        // Cap at ~30fps, and stop entirely when paused — no need to burn CPU
+        // animating a still visualization.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying)) { timeline in
             Canvas { context, size in
                 let bg = WinampPalette.background
                 context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(bg))
