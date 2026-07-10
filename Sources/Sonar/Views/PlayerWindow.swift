@@ -514,11 +514,17 @@ struct PlayerWindow: View {
             list
         }
         // Transparent fill in fullscreen so it blends with the dark backdrop, but
-        // always keep a border so the panel still has defined edges.
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(plain ? Color.clear : .white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(Color.white.opacity(plain ? 0.1 : 0.06)))
+        // always keep a border so the panel still has defined edges. Both live in
+        // .background (not .overlay) so the border never paints over content that
+        // draws its own overlays on top of itself, e.g. header button tooltips.
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(plain ? Color.clear : .white.opacity(0.05))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(plain ? 0.1 : 0.06))
+            }
+        )
     }
 
     private var libraryHeader: some View {
