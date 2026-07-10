@@ -111,7 +111,7 @@ struct SettingsView: View {
                             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .stroke(.white.opacity(0.15), lineWidth: selected ? 0 : 1))
                     }
-                    .buttonStyle(PressableButtonStyle(hoverScale: 1.22))
+                    .buttonStyle(PressableButtonStyle())
                     .onHover { hoveredTheme = $0 ? index : nil }
                     .help(theme.name)
                 }

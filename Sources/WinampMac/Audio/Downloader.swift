@@ -70,8 +70,9 @@ final class Downloader: ObservableObject {
     /// Download `urlString` into `folder`. Returns the new mp3's URL on success.
     func download(_ urlString: String, into folder: URL) async -> URL? {
         guard let ytDlpPath else {
-            lastError = "yt-dlp not installed (brew install yt-dlp)"
-            status = lastError!
+            let message = "yt-dlp not installed (brew install yt-dlp)"
+            lastError = message
+            status = message
             return nil
         }
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)

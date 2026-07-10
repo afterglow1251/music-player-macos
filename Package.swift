@@ -9,7 +9,12 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "WinampMac",
-            path: "Sources/WinampMac"
+            path: "Sources/WinampMac",
+            swiftSettings: [
+                // Never let a compiler warning slip by unnoticed — surface issues
+                // (unused values, deprecations, concurrency) at build time.
+                .unsafeFlags(["-warnings-as-errors"])
+            ]
         )
     ]
 )

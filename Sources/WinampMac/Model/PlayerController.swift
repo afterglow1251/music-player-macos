@@ -38,7 +38,7 @@ final class PlayerController: ObservableObject {
     }
 
     private var cancellables = Set<AnyCancellable>()
-    private let defaults = UserDefaults.standard
+    private let prefs = Preferences()
 
     init() {
         restorePreferences()
@@ -216,40 +216,39 @@ final class PlayerController: ObservableObject {
     func saveOnQuit() { save() }
 
     private func save() {
-        defaults.set(engine.volume, forKey: "volume")
-        defaults.set(engine.eqGains.map(Double.init), forKey: "eqGains")
-        defaults.set(engine.eqEnabled, forKey: "eqEnabled")
-        defaults.set(shuffle, forKey: "shuffle")
-        defaults.set(repeatMode.rawValue, forKey: "repeatMode")
-        defaults.set(themeIndex, forKey: "themeIndex")
+        prefs.volume = engine.volume
+        prefs.eqGains = engine.eqGains
+        prefs.eqEnabled = engine.eqEnabled
+        prefs.shuffle = shuffle
+        prefs.repeatMode = repeatMode
+        prefs.themeName = theme.name
         // Only touch the last track/position when something is actually loaded —
         // otherwise a save while idle would wipe the value we want to restore.
         if let track = currentTrack {
-            defaults.set(track.url.path, forKey: "lastTrack")
-            defaults.set(engine.currentTime, forKey: "lastPosition")
+            prefs.lastTrack = track.url.path
+            prefs.lastPosition = engine.currentTime
         }
     }
 
     private func restorePreferences() {
-        if defaults.object(forKey: "volume") != nil {
-            engine.volume = defaults.float(forKey: "volume")
+        if let volume = prefs.volume { engine.volume = volume }
+        if let gains = prefs.eqGains, gains.count == 10 { engine.eqGains = gains }
+        engine.eqEnabled = prefs.eqEnabled ?? true
+        shuffle = prefs.shuffle
+        repeatMode = prefs.repeatMode
+        if let name = prefs.themeName,
+           let index = VisualizerTheme.all.firstIndex(where: { $0.name == name }) {
+            themeIndex = index
         }
-        if let gains = defaults.array(forKey: "eqGains") as? [Double], gains.count == 10 {
-            engine.eqGains = gains.map(Float.init)
-        }
-        engine.eqEnabled = defaults.object(forKey: "eqEnabled") as? Bool ?? true
-        shuffle = defaults.bool(forKey: "shuffle")
-        repeatMode = RepeatMode(rawValue: defaults.integer(forKey: "repeatMode")) ?? .off
-        themeIndex = defaults.integer(forKey: "themeIndex")
     }
 
     private func restoreLastTrack(from tracks: [Track]) {
         guard currentTrack == nil,
-              let path = defaults.string(forKey: "lastTrack"),
+              let path = prefs.lastTrack,
               let track = tracks.first(where: { $0.url.path == path }) else { return }
         // Read the saved position BEFORE loading — engine.load() calls stop(),
         // which resets currentTime to 0 and would clobber the stored value.
-        let position = defaults.double(forKey: "lastPosition")
+        let position = prefs.lastPosition
         currentTrack = track
         engine.load(url: track.url, autoplay: false)
         if position > 1 { engine.seek(to: position) }

@@ -188,7 +188,7 @@ struct PlayerWindow: View {
     // MARK: Transport
 
     private var transportRow: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Spacer(minLength: 0)
 
             iconButton("folder", size: 15, help: "Open file") { openFile() }
@@ -196,7 +196,9 @@ struct PlayerWindow: View {
                 .keyboardShortcut(".", modifiers: .command)
             iconButton("backward.fill", size: 16, help: "Previous (⌘←)") { controller.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
+            iconButton("gobackward.10", size: 15, help: "Back 10s (⌥←)") { controller.seekBy(-10) }
             playButton
+            iconButton("goforward.10", size: 15, help: "Forward 10s (⌥→)") { controller.seekBy(10) }
             iconButton("forward.fill", size: 16, help: "Next (⌘→)") { controller.next() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
 
