@@ -784,10 +784,6 @@ struct PlayerWindow: View {
     private var downloadBar: some View {
         let downloading = controller.downloadsLeft > 0
         return VStack(spacing: 6) {
-            // Links queued via ＋, shown as compact chips before downloading starts.
-            if !downloading && !urlChips.isEmpty {
-                chipsStrip.transition(.opacity)
-            }
             HStack(spacing: 8) {
                 // Spinner while downloading, link icon otherwise.
                 Group {
@@ -870,6 +866,15 @@ struct PlayerWindow: View {
                 }
                 .clipShape(Capsule())
             )
+
+            // Chips sit in a reserved slot BELOW the field. The slot keeps a
+            // fixed height in BOTH states (input and downloading) so nothing —
+            // not the field above nor anything below — ever shifts. While
+            // downloading the chips are already cleared, so it's just space.
+            chipsStrip
+                .frame(height: 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
 
             if !downloading && !controller.downloader.isAvailable {
                 Text("yt-dlp not found — run: brew install yt-dlp")
