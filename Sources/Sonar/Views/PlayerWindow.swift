@@ -169,6 +169,20 @@ struct PlayerWindow: View {
         .ignoresSafeArea()
         .onDrop(of: [.fileURL, .url, .text], isTargeted: $isDropTargeted) { handleDrop($0) }
         .overlay(alignment: .bottom) { errorToast }
+        // Esc: if a field/search is active, just dismiss it — only leave fullscreen
+        // when nothing is focused (otherwise pressing Esc to clear a field would
+        // unexpectedly collapse the window).
+        .onExitCommand {
+            if searchActive {
+                withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
+                searchText = ""
+                searchFieldFocused = false
+            } else if urlFieldFocused || searchFieldFocused {
+                dismissFocus()
+            } else {
+                NSApp.keyWindow?.toggleFullScreen(nil)
+            }
+        }
         // ⌘, toggles the inline settings panel here too.
         .onReceive(NotificationCenter.default.publisher(for: .toggleSettings)) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
@@ -479,10 +493,12 @@ struct PlayerWindow: View {
             Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6)
             list
         }
+        // Transparent fill in fullscreen so it blends with the dark backdrop, but
+        // always keep a border so the panel still has defined edges.
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(plain ? Color.clear : .white.opacity(0.05)))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(plain ? Color.clear : Color.white.opacity(0.06)))
+            .stroke(Color.white.opacity(plain ? 0.1 : 0.06)))
     }
 
     private var libraryHeader: some View {
