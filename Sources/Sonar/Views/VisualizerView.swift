@@ -14,9 +14,13 @@ struct VisualizerView: View {
     @ObservedObject var engine: AudioEngine
     @Binding var mode: VisualizerMode
     var theme: VisualizerTheme = .classic
+    /// Number of vertical tile levels. Higher = a finer grid (fullscreen uses more).
+    var rows: Int = 16
+    /// Horizontal upsample factor: linearly interpolate the analyzer's bars into
+    /// `count * columnScale` columns, so a wide (fullscreen) layout doesn't stretch
+    /// the handful of bars into grotesquely wide blocks. 1 = raw bars (small window).
+    var columnScale: Int = 1
 
-    /// Logical (pre-scale) tile grid — mirrors the classic tiny vis window.
-    private let rows = 16            // vertical tile levels
     private let tileGap: CGFloat = 1 // 1px gap => the "tiles" look
 
     var body: some View {
@@ -47,7 +51,9 @@ struct VisualizerView: View {
 
     private func drawSpectrum(context: GraphicsContext, size: CGSize, at date: Date) {
         let frame = engine.analyzer.render(at: date.timeIntervalSinceReferenceDate)
-        let barCount = frame.bars.count
+        let bars = columnScale > 1 ? Self.upsample(frame.bars, factor: columnScale) : frame.bars
+        let peaks = columnScale > 1 ? Self.upsample(frame.peaks, factor: columnScale) : frame.peaks
+        let barCount = bars.count
 
         let barSlot = size.width / CGFloat(barCount)
         let barWidth = max(1, floor(barSlot) - tileGap)
@@ -57,7 +63,7 @@ struct VisualizerView: View {
             let x = floor(CGFloat(i) * barSlot)
 
             // How many tiles are lit for this bar (0...rows).
-            let litTiles = Int(round(frame.bars[i] * Float(rows)))
+            let litTiles = Int(round(bars[i] * Float(rows)))
             for tile in 0..<litTiles {
                 // tile 0 = bottom row, rows-1 = top row.
                 let y = size.height - CGFloat(tile + 1) * tileHeight
@@ -68,7 +74,7 @@ struct VisualizerView: View {
             }
 
             // The falling peak marker (one tile, drawn even above the bar).
-            let peakLevel = Int(round(frame.peaks[i] * Float(rows)))
+            let peakLevel = Int(round(peaks[i] * Float(rows)))
             if peakLevel > 0 {
                 let y = size.height - CGFloat(peakLevel) * tileHeight
                 let rect = CGRect(x: x, y: y + tileGap,
@@ -77,6 +83,23 @@ struct VisualizerView: View {
                 context.fill(Path(rect), with: .color(theme.peak))
             }
         }
+    }
+
+    /// Linearly interpolate `values` into `values.count * factor` samples, so the
+    /// tile columns stay a sane width on a wide display.
+    private static func upsample(_ values: [Float], factor: Int) -> [Float] {
+        guard factor > 1, values.count > 1 else { return values }
+        var out = [Float]()
+        out.reserveCapacity(values.count * factor)
+        for i in 0..<values.count {
+            let a = values[i]
+            let b = values[min(i + 1, values.count - 1)]
+            for j in 0..<factor {
+                let t = Float(j) / Float(factor)
+                out.append(a + (b - a) * t)
+            }
+        }
+        return out
     }
 
     // MARK: Oscilloscope (the green wave)

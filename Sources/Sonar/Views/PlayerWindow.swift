@@ -6,9 +6,12 @@ import UniformTypeIdentifiers
 /// a blurred artwork backdrop, glassy panels, and the classic tile visualizer.
 struct PlayerWindow: View {
     @StateObject private var controller = PlayerController()
+    @State private var isFullscreen = false
+    @State private var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
     @State private var visualizerMode: VisualizerMode = .spectrum
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
+    @State private var seekHoverX: CGFloat?   // cursor x over the position slider
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var searchActive = false
@@ -28,17 +31,41 @@ struct PlayerWindow: View {
     private var engine: AudioEngine { controller.engine }
 
     var body: some View {
-        VStack(spacing: 12) {
-            topBar
-            // Settings takes the artwork's slot so the visualizer below stays
-            // visible — theme/EQ changes preview live while the panel is open.
-            if showSettings {
-                SettingsView(controller: controller,
-                             width: contentWidth, height: artHeight)
-                    .transition(.opacity)
+        Group {
+            if isFullscreen {
+                fullscreenContent
             } else {
-                heroArt
+                normalContent
             }
+        }
+        // Enable the native green fullscreen button / ⌃⌘F, and track its state so
+        // we can swap in the immersive visualizer when the window goes fullscreen.
+        .background(FullscreenEnabler())
+        // Decode artwork here (not in normalContent) so the cover updates in
+        // fullscreen too, where normalContent isn't in the tree.
+        .onAppear { decodeArtwork(controller.currentTrack) }
+        .onChange(of: controller.currentTrack) { _, track in decodeArtwork(track) }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+            isFullscreen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
+            isFullscreen = false
+            // Leaving fullscreen, the resizable window keeps its huge frame — snap
+            // it back to the content's natural size so there are no black margins.
+            guard let window = note.object as? NSWindow else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(60))
+                if let content = window.contentView {
+                    let fit = content.fittingSize
+                    if fit.width > 100, fit.height > 100 { window.setContentSize(fit) }
+                }
+            }
+        }
+    }
+
+    private var normalContent: some View {
+        VStack(spacing: 12) {
+            heroSlot(width: contentWidth, height: artHeight)
             infoStrip
             visualizerStrip
             positionSlider
@@ -95,14 +122,86 @@ struct PlayerWindow: View {
         }
         // Don't let the URL field grab the cursor on launch.
         .onAppear {
-            decodeArtwork(controller.currentTrack)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
         }
-        .onChange(of: controller.currentTrack) { _, track in
-            decodeArtwork(track)
+    }
+
+    // MARK: Fullscreen (the whole player, spread across the big screen)
+
+    /// Fullscreen reuses every normal control — nothing is lost. It just lays the
+    /// player out in two columns (now-playing on the left, library/queue on the
+    /// right) over a blurred-artwork backdrop, with a larger visualizer.
+    private var fullscreenContent: some View {
+        GeometryReader { geo in
+            // Scale the cover and the list to the actual screen so it truly fills,
+            // and center the two columns so there's no top-left void.
+            let artSize = min(max(geo.size.height * 0.5, 340), 660)
+            let rightWidth = min(max(geo.size.width * 0.30, 420), 780)
+            ZStack {
+                fullscreenBackdrop
+                HStack(alignment: .top, spacing: 60) {
+                    VStack(spacing: 16) {
+                        heroSlot(width: artSize, height: artSize)
+                        infoStrip
+                        visualizerStrip
+                        positionSlider
+                        transportRow
+                        utilityRow
+                        downloadBar
+                    }
+                    .frame(width: artSize)
+                    // Measure the left column so the library can match its height exactly.
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: ColumnHeightKey.self, value: proxy.size.height)
+                    })
+
+                    fullscreenLibrary(height: fsLeftHeight)
+                        .frame(width: rightWidth)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onPreferenceChange(ColumnHeightKey.self) { fsLeftHeight = max($0, 320) }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
+        .background(Color.black)
+        .ignoresSafeArea()
+        .onDrop(of: [.fileURL, .url, .text], isTargeted: $isDropTargeted) { handleDrop($0) }
+        .overlay(alignment: .bottom) { errorToast }
+        // ⌘, toggles the inline settings panel here too.
+        .onReceive(NotificationCenter.default.publisher(for: .toggleSettings)) { _ in
+            withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
+        }
+        // ← → seek ±10s, ↑ ↓ volume (space is handled by the play button itself).
+        .background {
+            if !urlFieldFocused && !searchFieldFocused {
+                Group {
+                    Button("") { controller.seekBy(-10) }.keyboardShortcut(.leftArrow, modifiers: [])
+                    Button("") { controller.seekBy(10) }.keyboardShortcut(.rightArrow, modifiers: [])
+                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: [])
+                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: [])
+                }
+                .hidden()
+            }
+        }
+    }
+
+    private var fullscreenBackdrop: some View {
+        ZStack {
+            Color.black
+            if let image = artworkImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: 80)
+                    .opacity(0.28)
+                    .scaleEffect(1.2)
+            }
+            LinearGradient(colors: [.black.opacity(0.45), .clear, .black.opacity(0.55)],
+                           startPoint: .top, endPoint: .bottom)
+        }
+        .ignoresSafeArea()
     }
 
     // MARK: Backdrop (blurred artwork behind everything)
@@ -115,42 +214,45 @@ struct PlayerWindow: View {
 
     // MARK: Hero artwork (whole photo, never cropped)
 
-    private var heroArt: some View {
+    private var heroArt: some View { heroArtView(width: contentWidth, height: artHeight) }
+
+    /// The breathing cover, at an arbitrary size (fullscreen uses a big square).
+    private func heroArtView(width: CGFloat, height: CGFloat) -> some View {
         // The artwork gently "breathes" with the bass while playing (capped at
         // 30fps, and stopped when paused so it doesn't spin the CPU while idle).
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying)) { _ in
             // bassLevel eases to 0 when paused, so the scale glides back to 1
             // smoothly instead of snapping.
             let bass = CGFloat(min(max(engine.analyzer.bassLevel, 0), 1))
-            artworkContent.scaleEffect(1 + bass * 0.035)
+            artworkContent(width: width, height: height).scaleEffect(1 + bass * 0.035)
         }
-        .frame(width: contentWidth, height: artHeight)
+        .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         // Click the cover to dismiss the URL field's cursor.
         .contentShape(Rectangle())
         .onTapGesture { dismissFocus() }
     }
 
-    private var artworkContent: some View {
+    private func artworkContent(width: CGFloat, height: CGFloat) -> some View {
         ZStack {
             if let image = artworkImage {
                 // Photo FILLS the whole box edge-to-edge (no bands); overflow clipped.
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: contentWidth, height: artHeight)
+                    .frame(width: width, height: height)
                     .clipped()
             } else {
                 ZStack {
                     LinearGradient(colors: [Color(white: 0.18), Color(white: 0.08)],
                                    startPoint: .top, endPoint: .bottom)
                     Image(systemName: "music.note")
-                        .font(.system(size: 92))
+                        .font(.system(size: height > 400 ? 130 : 92))
                         .foregroundStyle(.white.opacity(0.25))
                 }
             }
         }
-        .frame(width: contentWidth, height: artHeight)
+        .frame(width: width, height: height)
         .background(Color.black)
     }
 
@@ -177,28 +279,47 @@ struct PlayerWindow: View {
     }
 
     private var visualizerStrip: some View {
-        VisualizerView(engine: engine, mode: $visualizerMode, theme: controller.theme)
-            .frame(height: 48)
+        VisualizerView(engine: engine, mode: $visualizerMode, theme: controller.theme,
+                       rows: isFullscreen ? 22 : 16, columnScale: isFullscreen ? 2 : 1)
+            .frame(height: isFullscreen ? 88 : 48)
             .frame(maxWidth: .infinity)
     }
 
     // MARK: Position slider
 
     private var positionSlider: some View {
-        Slider(
-            value: Binding(
-                get: { isScrubbing ? scrubTime : engine.currentTime },
-                set: { scrubTime = $0 }
-            ),
-            in: 0...max(engine.duration, 0.01),
-            onEditingChanged: { editing in
-                isScrubbing = editing
-                if !editing { engine.seek(to: scrubTime) }
+        GeometryReader { geo in
+            Slider(
+                value: Binding(
+                    get: { isScrubbing ? scrubTime : engine.currentTime },
+                    set: { scrubTime = $0 }
+                ),
+                in: 0...max(engine.duration, 0.01),
+                onEditingChanged: { editing in
+                    isScrubbing = editing
+                    if !editing { engine.seek(to: scrubTime) }
+                }
+            )
+            .controlSize(.small)
+            .tint(accent)
+            .disabled(engine.duration <= 0)
+            // Hover anywhere on the bar to preview the time at that position.
+            .overlay {
+                if let x = seekHoverX, engine.duration > 0 {
+                    let frac = min(max(x / geo.size.width, 0), 1)
+                    TooltipLabel(text: timeString(frac * engine.duration))
+                        .position(x: min(max(x, 24), geo.size.width - 24), y: -18)
+                        .allowsHitTesting(false)
+                }
             }
-        )
-        .controlSize(.small)
-        .tint(accent)
-        .disabled(engine.duration <= 0)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point): seekHoverX = point.x
+                case .ended: seekHoverX = nil
+                }
+            }
+        }
+        .frame(height: 22)
     }
 
     // MARK: Transport
@@ -210,12 +331,12 @@ struct PlayerWindow: View {
             toggleIcon("shuffle", active: controller.shuffle, size: 13, help: "Shuffle") {
                 controller.shuffle.toggle()
             }
-            iconButton("backward.fill", size: 17, help: "Previous (⌘←)") { controller.previous() }
+            iconButton("backward.end", size: 17, help: "Previous  ⌘◀") { controller.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
-            iconButton("gobackward.10", size: 15, help: "Back 10s (⌥←)") { controller.seekBy(-10) }
+            iconButton("gobackward.10", size: 15, help: "Back 10 seconds  ◀") { controller.seekBy(-10) }
             playButton
-            iconButton("goforward.10", size: 15, help: "Forward 10s (⌥→)") { controller.seekBy(10) }
-            iconButton("forward.fill", size: 17, help: "Next (⌘→)") { controller.next() }
+            iconButton("goforward.10", size: 15, help: "Forward 10 seconds  ▶") { controller.seekBy(10) }
+            iconButton("forward.end", size: 17, help: "Next  ⌘▶") { controller.next() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
             toggleIcon(controller.repeatMode == .one ? "repeat.1" : "repeat",
                        active: controller.repeatMode != .off, size: 13, help: "Repeat") {
@@ -235,7 +356,7 @@ struct PlayerWindow: View {
                 .shadow(color: accent.opacity(0.5), radius: 8)
         }
         .buttonStyle(PressableButtonStyle(hoverScale: 1.06))
-        .help(engine.isPlaying ? "Pause (Space)" : "Play (Space)")
+        .tooltip(engine.isPlaying ? "Pause" : "Play")
         .keyboardShortcut(.space, modifiers: [])
     }
 
@@ -250,7 +371,7 @@ struct PlayerWindow: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .help(help)
+        .tooltip(help)
     }
 
     /// Toggle icon (shuffle/repeat) — green when active, gray when off.
@@ -264,7 +385,7 @@ struct PlayerWindow: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .help(help)
+        .tooltip(help)
     }
 
     // MARK: Utility row (open file + volume — de-emphasized)
@@ -280,7 +401,7 @@ struct PlayerWindow: View {
                     .frame(width: 18, height: 18)
             }
             .buttonStyle(PressableButtonStyle())
-            .help(engine.isMuted ? "Unmute" : "Mute")
+            .tooltip(engine.isMuted ? "Unmute" : "Mute")
             Slider(value: Binding(get: { engine.volume }, set: { engine.volume = $0 }), in: 0...1)
                 .controlSize(.mini)
                 .tint(accent)
@@ -290,20 +411,44 @@ struct PlayerWindow: View {
 
     // MARK: Top bar (settings lives here, top-right)
 
-    private var topBar: some View {
-        HStack(spacing: 8) {
-            if let remaining = controller.sleepRemaining {
-                sleepBadge(timeString(remaining))
-            } else if controller.sleepMode == .endOfTrack {
-                sleepBadge("track end")
+    /// The cover slot: artwork (or the Settings panel), with the settings toggle
+    /// and sleep badge floating over its top corners — no separate top bar needed.
+    private func heroSlot(width: CGFloat, height: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            if showSettings {
+                SettingsView(controller: controller, width: width, height: height)
+                    .transition(.opacity)
+            } else {
+                heroArtView(width: width, height: height)
             }
-            Spacer()
-            toggleIcon("slider.horizontal.3", active: showSettings, size: 15,
-                       help: "Settings — theme & equalizer (⌘,)") {
-                withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
+            HStack(spacing: 8) {
+                if let remaining = controller.sleepRemaining {
+                    sleepBadge(timeString(remaining))
+                } else if controller.sleepMode == .endOfTrack {
+                    sleepBadge("track end")
+                }
+                Spacer()
+                settingsToggle
             }
+            .padding(10)
+            .frame(width: width)
         }
-        .frame(height: 24)
+        .frame(width: width, height: height)
+    }
+
+    private var settingsToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(showSettings ? accent : .white.opacity(0.9))
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(.black.opacity(0.35)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .tooltip("Settings")
     }
 
     private func sleepBadge(_ text: String) -> some View {
@@ -312,18 +457,32 @@ struct PlayerWindow: View {
             Text(text).font(.system(size: 10, weight: .semibold, design: .rounded))
         }
         .foregroundStyle(accent)
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(Capsule().fill(.black.opacity(0.35)))
     }
 
     // MARK: Library section (header with expandable search + track list)
 
-    private var librarySection: some View {
+    /// Normal window: fixed-height list.
+    private var librarySection: some View { libraryCard(list: trackScroll(fixedHeight: 168)) }
+
+    /// Fullscreen: the card fills an exact height (matched to the left column), the
+    /// list stretches to fill it, and it stays transparent so it blends into the
+    /// dark backdrop instead of reading as a lighter panel.
+    private func fullscreenLibrary(height: CGFloat) -> some View {
+        libraryCard(list: trackScroll(fixedHeight: nil), plain: true).frame(height: height)
+    }
+
+    private func libraryCard(list: some View, plain: Bool = false) -> some View {
         VStack(spacing: 0) {
             libraryHeader
             Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6)
-            trackScroll
+            list
         }
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(plain ? Color.clear : .white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(plain ? Color.clear : Color.white.opacity(0.06)))
     }
 
     private var libraryHeader: some View {
@@ -355,7 +514,7 @@ struct PlayerWindow: View {
                         .frame(width: 22, height: 22).contentShape(Rectangle())
                 }
                 .buttonStyle(PressableButtonStyle())
-                .help("Show music folder in Finder")
+                .tooltip("Show in Finder")
                 if !controller.library.tracks.isEmpty {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { searchActive = true }
@@ -366,7 +525,7 @@ struct PlayerWindow: View {
                             .frame(width: 22, height: 22).contentShape(Rectangle())
                     }
                     .buttonStyle(PressableButtonStyle())
-                    .help("Search")
+                    .tooltip("Search")
                 }
             }
         }
@@ -400,7 +559,7 @@ struct PlayerWindow: View {
         .padding(.vertical, 2)
     }
 
-    private var trackScroll: some View {
+    private func trackScroll(fixedHeight: CGFloat?) -> some View {
         ScrollView {
             LazyVStack(spacing: 2) {
                 // The queue lives at the top of this same fixed-height list, so it
@@ -442,7 +601,8 @@ struct PlayerWindow: View {
             }
             .padding(.horizontal, 6).padding(.vertical, 6)
         }
-        .frame(height: 168)
+        .frame(height: fixedHeight)
+        .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
         .scrollIndicators(.hidden)
     }
 
@@ -535,11 +695,16 @@ struct PlayerWindow: View {
     }
 
     private var filteredTracks: [Track] {
-        let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        let query = searchText.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return controller.library.tracks }
-        return controller.library.tracks.filter {
-            $0.displayTitle.lowercased().contains(query) || $0.artist.lowercased().contains(query)
-        }
+        // Fuzzy: typo-tolerant, ranked best-match first.
+        return controller.library.tracks
+            .compactMap { track -> (track: Track, score: Double)? in
+                guard let s = FuzzySearch.score(query, in: [track.displayTitle, track.artist]) else { return nil }
+                return (track, s)
+            }
+            .sorted { $0.score > $1.score }
+            .map(\.track)
     }
 
     // MARK: Drag & drop

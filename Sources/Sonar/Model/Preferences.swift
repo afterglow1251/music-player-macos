@@ -11,6 +11,26 @@ final class Preferences {
     private enum Key: String {
         case volume, eqGains, eqEnabled, shuffle, repeatMode
         case themeName, lastTrack, lastPosition, musicFolderBookmark
+        case libraryOrder, librarySort, playlists
+    }
+
+    /// Manual library order — file paths in the order the user arranged them.
+    /// New files not in this list are appended; missing ones are dropped on scan.
+    var libraryOrder: [String] {
+        get { defaults.array(forKey: Key.libraryOrder.rawValue) as? [String] ?? [] }
+        set { defaults.set(newValue, forKey: Key.libraryOrder.rawValue) }
+    }
+
+    /// Raw value of `LibrarySort` (manual / title / dateAdded).
+    var librarySort: String? {
+        get { defaults.string(forKey: Key.librarySort.rawValue) }
+        set { defaults.set(newValue, forKey: Key.librarySort.rawValue) }
+    }
+
+    /// JSON-encoded `[Playlist]`.
+    var playlists: Data? {
+        get { defaults.data(forKey: Key.playlists.rawValue) }
+        set { defaults.set(newValue, forKey: Key.playlists.rawValue) }
     }
 
     /// Bookmark to the music folder — survives the folder being renamed/moved

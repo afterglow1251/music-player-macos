@@ -9,7 +9,10 @@ struct SonarApp: App {
         Window("Sonar", id: "player") {
             PlayerWindow()
         }
-        .windowResizability(.contentSize)
+        // .contentMinSize (not .contentSize) keeps the window from shrinking below
+        // its content, but leaves it resizable — which is what enables the native
+        // green fullscreen button (⌃⌘F) that swaps in the fullscreen visualizer.
+        .windowResizability(.contentMinSize)
         .windowStyle(.hiddenTitleBar)
         .commands {
             // Standard macOS "Settings…" (⌘,) toggles the inline settings panel.

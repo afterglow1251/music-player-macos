@@ -22,6 +22,58 @@ struct AnimatedStatusText: View {
     }
 }
 
+/// A small, dark, rounded tooltip label — Spotify-style.
+struct TooltipLabel: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color(white: 0.16)))
+            .shadow(color: .black.opacity(0.45), radius: 8, y: 3)
+            .fixedSize()
+    }
+}
+
+extension View {
+    /// Show a tidy custom tooltip above this view on hover (replaces the slow,
+    /// native yellow `.help` tooltip with a Spotify-style one).
+    func tooltip(_ text: String) -> some View { modifier(TooltipModifier(text: text)) }
+}
+
+private struct TooltipModifier: ViewModifier {
+    let text: String
+    @State private var show = false
+    @State private var delay: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                delay?.cancel()
+                if hovering {
+                    delay = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(400))
+                        if !Task.isCancelled { withAnimation(.easeOut(duration: 0.12)) { show = true } }
+                    }
+                } else {
+                    withAnimation(.easeOut(duration: 0.1)) { show = false }
+                }
+            }
+            .overlay(alignment: .top) {
+                if show {
+                    TooltipLabel(text: text)
+                        .offset(y: -30)
+                        .allowsHitTesting(false)
+                        .fixedSize()
+                        .transition(.opacity)
+                }
+            }
+    }
+}
+
 /// A button style that reacts to hover and press: it brightens and grows a touch
 /// on hover, and dips down when pressed — small springy feedback for liveliness.
 struct PressableButtonStyle: ButtonStyle {
