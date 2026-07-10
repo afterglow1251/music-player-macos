@@ -1,5 +1,27 @@
 import SwiftUI
 
+/// Status text whose trailing "…" animates as 1→2→3 dots, so an indeterminate
+/// step (e.g. "Preparing…") looks alive rather than frozen.
+struct AnimatedStatusText: View {
+    let status: String
+
+    var body: some View {
+        if status.hasSuffix("…") {
+            // "Loading" stays put; only the dots cycle inside a fixed-width slot.
+            TimelineView(.periodic(from: .now, by: 0.35)) { context in
+                let dots = Int(context.date.timeIntervalSinceReferenceDate / 0.35) % 3 + 1
+                HStack(spacing: 0) {
+                    Text(status.dropLast())
+                    Text(String(repeating: ".", count: dots))
+                        .frame(width: 12, alignment: .leading)
+                }
+            }
+        } else {
+            Text(status)
+        }
+    }
+}
+
 /// A button style that reacts to hover and press: it brightens and grows a touch
 /// on hover, and dips down when pressed — small springy feedback for liveliness.
 struct PressableButtonStyle: ButtonStyle {
@@ -33,10 +55,10 @@ struct TrackRowView: View {
     let track: Track
     let isCurrent: Bool
     let isPlaying: Bool
-    let accent: Color
     let durationText: String
     let onTap: () -> Void
     let onDelete: () -> Void
+    private let accent = Theme.accent
 
     @State private var hovering = false
 

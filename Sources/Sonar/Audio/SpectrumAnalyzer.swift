@@ -1,23 +1,23 @@
 import Foundation
 import Accelerate
 
-/// Turns raw audio samples into Winamp-style spectrum bars.
+/// Turns raw audio samples into classic spectrum bars.
 ///
 /// The analyzer is fed samples from the audio tap (a realtime thread) and is
 /// read from the render loop (main thread). Access to the shared sample buffer
 /// is guarded by a lock, so the class is safe to touch from both — hence
 /// `@unchecked Sendable`.
 ///
-/// The "Winamp look" comes from two pieces of physics applied every frame:
+/// The "classic look" comes from two pieces of physics applied every frame:
 ///   * bars fall quickly toward the current spectrum value (fast decay),
 ///   * peak markers snap up instantly, then sink slowly with gravity.
 final class SpectrumAnalyzer: @unchecked Sendable {
 
     // MARK: Configuration
 
-    /// Number of vertical bars. Classic Winamp draws ~19 in the small window.
+    /// Number of vertical bars. Classic analyzers draw ~19 in the small window.
     let barCount: Int
-    /// FFT window size (power of two). 512 ≈ the 576-sample block Winamp vis uses.
+    /// FFT window size (power of two). 512 ≈ a classic 576-sample vis block.
     private let fftSize: Int
 
     /// How far a bar may fall per second (in 0...1 units). Big = snappy.
@@ -86,7 +86,7 @@ final class SpectrumAnalyzer: @unchecked Sendable {
         self.peakVelocities = [Float](repeating: 0, count: barCount)
 
         // Log-spaced bin grouping: low frequencies get a few bins, highs get many.
-        // This matches how Winamp's bars feel — bass on the left, treble on the right.
+        // This matches how the bars feel — bass on the left, treble on the right.
         let binCount = fftSize / 2
         var bins: [(Int, Int)] = []
         let minBin = 1.0
@@ -226,7 +226,7 @@ final class SpectrumAnalyzer: @unchecked Sendable {
             }
             let avg = (sum / Float(max(1, hi - lo))) * scale
 
-            // dB scaling gives the lively, music-reactive motion Winamp has.
+            // dB scaling gives a lively, music-reactive motion.
             let db = 20 * log10(avg + 1e-7)
             let normalized = (db + 60) / 60   // map -60...0 dB → 0...1
             spectrum[i] = min(max(normalized, 0), 1)

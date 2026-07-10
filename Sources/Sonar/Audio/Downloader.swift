@@ -53,18 +53,18 @@ final class Downloader: ObservableObject {
         status = message
     }
 
-    /// Fetch just the title (no download) so callers can dedupe against the library.
-    func fetchTitle(_ urlString: String) async -> String? {
+    /// Fetch the video id (no download) so callers can dedupe against the library.
+    func fetchVideoID(_ urlString: String) async -> String? {
         guard let ytDlpPath else { return nil }
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let output = OutputBox()
         _ = await run(executable: ytDlpPath,
-                      arguments: ["--print", "%(title)s", "--skip-download", "--no-playlist", trimmed],
+                      arguments: ["--print", "%(id)s", "--skip-download", "--no-playlist", trimmed],
                       collect: { output.append($0) })
-        let title = output.value.split(separator: "\n").first.map(String.init)?
+        let id = output.value.split(separator: "\n").first.map(String.init)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (title?.isEmpty == false) ? title : nil
+        return (id?.isEmpty == false) ? id : nil
     }
 
     /// Download `urlString` into `folder`. Returns the new mp3's URL on success.
@@ -91,7 +91,7 @@ final class Downloader: ObservableObject {
                     "--no-playlist", "--embed-thumbnail", "--add-metadata",
                     "--newline",
                     "--ffmpeg-location", toolsDir,
-                    "-o", folder.appendingPathComponent("%(title)s.%(ext)s").path,
+                    "-o", folder.appendingPathComponent("%(title)s [%(id)s].%(ext)s").path,
                     trimmed]
 
         let code = await run(executable: ytDlpPath, arguments: args)

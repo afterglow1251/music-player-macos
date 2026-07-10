@@ -14,7 +14,7 @@ final class AudioEngine: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
-    @Published private(set) var trackTitle: String = "WINAMP MAC"
+    @Published private(set) var trackTitle: String = "SONAR"
     @Published var volume: Float = 0.75 {
         didSet { engine.mainMixerNode.outputVolume = volume }
     }
@@ -131,7 +131,7 @@ final class AudioEngine: ObservableObject {
             analyzer.isRunning = true
             startProgressTimer()
         } catch {
-            NSLog("[WinampMac] play() failed: \(error)")
+            NSLog("[Sonar] play() failed: \(error)")
             isPlaying = false
         }
     }

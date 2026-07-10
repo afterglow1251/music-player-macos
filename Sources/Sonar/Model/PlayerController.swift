@@ -179,12 +179,10 @@ final class PlayerController: ObservableObject {
         let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !url.isEmpty else { return }
         Task {
-            // Skip if we already have a track with this title.
+            // Skip if we already have this exact video (matched by its id).
             downloader.beginChecking()
-            if let title = await downloader.fetchTitle(url),
-               let existing = library.tracks.first(where: {
-                   $0.displayTitle.caseInsensitiveCompare(title) == .orderedSame
-               }) {
+            if let videoID = await downloader.fetchVideoID(url),
+               let existing = library.tracks.first(where: { $0.videoID == videoID }) {
                 downloader.finishChecking(message: "Already in library")
                 urlInput = ""
                 play(existing)

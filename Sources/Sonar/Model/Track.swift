@@ -14,9 +14,23 @@ struct Track: Identifiable, Hashable, Sendable {
 
     var url: URL { id }
 
-    /// Falls back to the file name when the file has no title tag.
+    // A YouTube id is 11 chars of [A-Za-z0-9_-], embedded in the file name as
+    // "name [id]". Compiled once and shared read-only (safe despite Regex not
+    // being Sendable), and type-checked at compile time.
+    nonisolated(unsafe) private static let idRegex = /\[([A-Za-z0-9_-]{11})\]$/
+    nonisolated(unsafe) private static let idSuffixRegex = /[ ]*\[[A-Za-z0-9_-]{11}\]$/
+
+    /// The embedded YouTube video id, used to detect duplicates precisely.
+    var videoID: String? {
+        let name = id.deletingPathExtension().lastPathComponent
+        return name.firstMatch(of: Self.idRegex).map { String($0.1) }
+    }
+
+    /// Falls back to the file name (minus the `[id]` suffix) when there's no title tag.
     var displayTitle: String {
-        title.isEmpty ? id.deletingPathExtension().lastPathComponent : title
+        if !title.isEmpty { return title }
+        let name = id.deletingPathExtension().lastPathComponent
+        return name.replacing(Self.idSuffixRegex, with: "")
     }
 
     static func == (lhs: Track, rhs: Track) -> Bool { lhs.id == rhs.id }

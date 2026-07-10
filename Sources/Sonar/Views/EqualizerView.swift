@@ -3,7 +3,7 @@ import SwiftUI
 /// 10-band graphic equalizer with vertical sliders and presets.
 struct EqualizerView: View {
     @ObservedObject var controller: PlayerController
-    let accent: Color
+    private let accent = Theme.accent
 
     private let labels = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
 
@@ -18,7 +18,6 @@ struct EqualizerView: View {
                         gain: Binding(get: { engine.eqGains[i] },
                                       set: { engine.eqGains[i] = $0 }),
                         label: labels[i],
-                        accent: accent,
                         enabled: engine.eqEnabled
                     )
                 }
@@ -64,8 +63,8 @@ struct EqualizerView: View {
 private struct EQBandSlider: View {
     @Binding var gain: Float
     let label: String
-    let accent: Color
     let enabled: Bool
+    private let accent = Theme.accent
 
     private let length: CGFloat = 76
 

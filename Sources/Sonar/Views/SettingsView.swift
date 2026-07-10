@@ -1,11 +1,12 @@
 import SwiftUI
+import AppKit
 
 /// Inline settings panel that takes the artwork's place — the visualizer below
 /// stays visible so theme/EQ changes preview live. Equalizer is on top (most
 /// used); themes are a compact swatch row that reveals names on hover.
 struct SettingsView: View {
     @ObservedObject var controller: PlayerController
-    let accent: Color
+    private let accent = Theme.accent
     let width: CGFloat
     let height: CGFloat
 
@@ -20,9 +21,10 @@ struct SettingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    EqualizerView(controller: controller, accent: accent)
+                    EqualizerView(controller: controller)
                     sleepSection
                     themeSection
+                    storageSection
                 }
                 .padding(5)   // room for hover-scaled buttons
             }
@@ -116,6 +118,40 @@ struct SettingsView: View {
                     .help(theme.name)
                 }
             }
+        }
+    }
+
+    // MARK: Storage
+
+    private var storageSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionTitle("MUSIC FOLDER")
+            Text(controller.library.folder.path)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1).truncationMode(.middle)
+            HStack(spacing: 14) {
+                Button("Change…", action: chooseFolder)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(accent)
+                Button("Show in Finder") { controller.library.revealInFinder() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.directoryURL = controller.library.folder
+        if panel.runModal() == .OK, let url = panel.url {
+            controller.library.setFolder(url)
         }
     }
 

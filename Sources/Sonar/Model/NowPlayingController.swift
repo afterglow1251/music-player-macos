@@ -37,7 +37,7 @@ final class NowPlayingController {
 
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: track.displayTitle,
-            MPMediaItemPropertyArtist: track.artist.isEmpty ? "Winamp Mac" : track.artist,
+            MPMediaItemPropertyArtist: track.artist.isEmpty ? "Sonar" : track.artist,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,

@@ -5,7 +5,7 @@ enum VisualizerMode {
     case oscilloscope
 }
 
-/// The Winamp-style visualization: stacked colored tiles with falling peaks.
+/// The classic tile visualization: stacked colored tiles with falling peaks.
 ///
 /// Everything is drawn on an integer pixel grid at a fixed logical resolution,
 /// then scaled up — that keeps the chunky, "one tile at a time" retro look
@@ -15,7 +15,7 @@ struct VisualizerView: View {
     @Binding var mode: VisualizerMode
     var theme: VisualizerTheme = .classic
 
-    /// Logical (pre-scale) tile grid — mirrors Winamp's tiny vis window.
+    /// Logical (pre-scale) tile grid — mirrors the classic tiny vis window.
     private let rows = 16            // vertical tile levels
     private let tileGap: CGFloat = 1 // 1px gap => the "tiles" look
 
@@ -24,7 +24,7 @@ struct VisualizerView: View {
         // animating a still visualization.
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying)) { timeline in
             Canvas { context, size in
-                let bg = WinampPalette.background
+                let bg = Palette.background
                 context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(bg))
 
                 switch mode {
@@ -35,7 +35,7 @@ struct VisualizerView: View {
                 }
             }
         }
-        .background(WinampPalette.background)
+        .background(Palette.background)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             // Double-click flips modes, just like the real thing.

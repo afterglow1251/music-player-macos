@@ -2,11 +2,11 @@ import SwiftUI
 import AppKit
 
 @main
-struct WinampApp: App {
+struct SonarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window("Winamp Mac", id: "player") {
+        Window("Sonar", id: "player") {
             PlayerWindow()
         }
         .windowResizability(.contentSize)
@@ -24,7 +24,7 @@ struct WinampApp: App {
 }
 
 extension Notification.Name {
-    static let toggleSettings = Notification.Name("WinampMac.toggleSettings")
+    static let toggleSettings = Notification.Name("Sonar.toggleSettings")
 }
 
 /// When launched as a bare SwiftPM binary (no .app bundle), macOS treats us as a

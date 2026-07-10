@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Horizontally scrolling text — like Winamp's title bar. Scrolls only when the
+/// Horizontally scrolling text — like a classic player's title bar. Scrolls only when the
 /// text is wider than its container; otherwise it sits still.
 ///
 /// The text width is measured mathematically from the font (not via a hidden

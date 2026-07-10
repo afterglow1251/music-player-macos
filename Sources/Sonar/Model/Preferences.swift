@@ -10,7 +10,14 @@ final class Preferences {
 
     private enum Key: String {
         case volume, eqGains, eqEnabled, shuffle, repeatMode
-        case themeName, lastTrack, lastPosition
+        case themeName, lastTrack, lastPosition, musicFolderBookmark
+    }
+
+    /// Bookmark to the music folder — survives the folder being renamed/moved
+    /// (a plain path string would not). nil = use the default location.
+    var musicFolderBookmark: Data? {
+        get { defaults.data(forKey: Key.musicFolderBookmark.rawValue) }
+        set { defaults.set(newValue, forKey: Key.musicFolderBookmark.rawValue) }
     }
 
     var volume: Float? {

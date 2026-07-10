@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum WinampPalette {
+enum Palette {
     /// The visualizer always sits on black.
     static let background = Color.black
 }

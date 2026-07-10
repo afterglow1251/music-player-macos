@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// The main player window — a modern take on Winamp: a big uncropped cover,
+/// The main player window — a modern retro-skinned player: a big uncropped cover,
 /// a blurred artwork backdrop, glassy panels, and the classic tile visualizer.
 struct PlayerWindow: View {
     @StateObject private var controller = PlayerController()
@@ -19,8 +19,8 @@ struct PlayerWindow: View {
     @FocusState private var urlFieldFocused: Bool
     @FocusState private var searchFieldFocused: Bool
 
-    /// Accent — the signature Winamp green, used sparingly.
-    private let accent = Color(red: 0.29, green: 0.87, blue: 0.42)
+    /// Accent — the signature green, used sparingly.
+    private let accent = Theme.accent
 
     private let contentWidth: CGFloat = 460
     private let artHeight: CGFloat = 340
@@ -33,7 +33,7 @@ struct PlayerWindow: View {
             // Settings takes the artwork's slot so the visualizer below stays
             // visible — theme/EQ changes preview live while the panel is open.
             if showSettings {
-                SettingsView(controller: controller, accent: accent,
+                SettingsView(controller: controller,
                              width: contentWidth, height: artHeight)
                     .transition(.opacity)
             } else {
@@ -349,6 +349,13 @@ struct PlayerWindow: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
                 Spacer()
+                Button { controller.library.revealInFinder() } label: {
+                    Image(systemName: "folder").font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .help("Show music folder in Finder")
                 if !controller.library.tracks.isEmpty {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { searchActive = true }
@@ -381,7 +388,6 @@ struct PlayerWindow: View {
                         track: track,
                         isCurrent: controller.currentTrack == track,
                         isPlaying: engine.isPlaying,
-                        accent: accent,
                         durationText: timeString(track.duration),
                         onTap: { controller.play(track) },
                         onDelete: { controller.delete(track) }
@@ -451,7 +457,7 @@ struct PlayerWindow: View {
             if controller.downloader.isDownloading {
                 HStack(spacing: 8) {
                     ProgressView(value: controller.downloader.progress).tint(accent)
-                    Text(controller.downloader.status)
+                    AnimatedStatusText(status: controller.downloader.status)
                         .font(.system(size: 10, design: .rounded))
                         .foregroundStyle(.white.opacity(0.6))
                         .frame(width: 118, alignment: .trailing)
@@ -474,7 +480,7 @@ struct PlayerWindow: View {
     // MARK: Now-playing text
 
     private var nowPlayingArtist: String {
-        guard let track = controller.currentTrack, !track.artist.isEmpty else { return "WINAMP · MAC" }
+        guard let track = controller.currentTrack, !track.artist.isEmpty else { return "SONAR" }
         return track.artist
     }
 

@@ -1,0 +1,194 @@
+import Foundation
+import AppKit
+
+/// The user's music library. Lives in a normal, Finder-reachable folder
+/// (default `~/Documents/Sonar/`, changeable in Settings) and watches that
+/// folder so files added/removed in Finder show up without a restart.
+@MainActor
+final class MusicLibrary: ObservableObject {
+    @Published private(set) var tracks: [Track] = []
+    @Published private(set) var folder: URL
+
+    private let prefs = Preferences()
+    private static let audioExtensions: Set<String> = ["mp3", "m4a", "wav", "aiff", "aif", "flac"]
+
+    // Folder watcher.
+    private var watcher: DispatchSourceFileSystemObject?
+    private var watchedFD: Int32 = -1
+    private var rescanTask: Task<Void, Never>?
+
+    init() {
+        folder = Self.resolveFolder(prefs: Preferences())
+        Self.migrateLegacyFiles(into: folder)
+        startWatching()
+        Task { await scan() }
+    }
+
+    deinit { watcher?.cancel() }
+
+    // MARK: Public API
+
+    func revealInFinder() {
+        NSWorkspace.shared.open(folder)
+    }
+
+    /// Reload every audio file in the folder.
+    func scan() async {
+        let fm = FileManager.default
+        let urls = (try? fm.contentsOfDirectory(at: folder,
+                                                includingPropertiesForKeys: nil,
+                                                options: [.skipsHiddenFiles])) ?? []
+        let audioURLs = urls.filter { Self.audioExtensions.contains($0.pathExtension.lowercased()) }
+
+        var loaded: [Track] = []
+        for url in audioURLs {
+            loaded.append(await Track.load(from: url))
+        }
+        tracks = sorted(loaded)
+    }
+
+    /// Add a single freshly-downloaded file without rescanning everything.
+    @discardableResult
+    func add(_ url: URL) async -> Track {
+        let track = await Track.load(from: url)
+        if let existing = tracks.firstIndex(of: track) {
+            tracks[existing] = track
+        } else {
+            tracks = sorted(tracks + [track])
+        }
+        return track
+    }
+
+    /// Move a track's file to the Trash and drop it from the library.
+    func delete(_ track: Track) {
+        try? FileManager.default.trashItem(at: track.url, resultingItemURL: nil)
+        tracks.removeAll { $0 == track }
+    }
+
+    /// Change the library folder: move existing tracks there, then re-scan/watch.
+    func setFolder(_ newFolder: URL) {
+        guard newFolder.standardizedFileURL.path != folder.standardizedFileURL.path else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: newFolder, withIntermediateDirectories: true)
+
+        for track in tracks {
+            let destination = newFolder.appendingPathComponent(track.url.lastPathComponent)
+            if !fm.fileExists(atPath: destination.path) {
+                try? fm.moveItem(at: track.url, to: destination)
+            }
+        }
+
+        folder = newFolder
+        prefs.musicFolderBookmark = try? newFolder.bookmarkData()
+        startWatching()
+        Task { await scan() }
+    }
+
+    // MARK: Folder watching
+
+    private func startWatching() {
+        watcher?.cancel()
+        let descriptor = open(folder.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        watchedFD = descriptor
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .delete, .rename],
+            queue: .main)
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in self?.scheduleRescan() }
+        }
+        source.setCancelHandler { close(descriptor) }
+        watcher = source
+        source.resume()
+    }
+
+    /// Debounced rescan — one pass after changes settle (e.g. copying many files).
+    private func scheduleRescan() {
+        rescanTask?.cancel()
+        rescanTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            if Task.isCancelled { return }
+            followRename()
+            await scan()
+        }
+    }
+
+    /// The FD tracks the folder even if it's renamed while we run — read its
+    /// current path back and update our URL + bookmark to match.
+    private func followRename() {
+        guard watchedFD >= 0, let url = Self.currentFolderURL(of: watchedFD) else { return }
+        if url.standardizedFileURL.path != folder.standardizedFileURL.path {
+            folder = url
+            prefs.musicFolderBookmark = try? url.bookmarkData()
+        }
+    }
+
+    private static func currentFolderURL(of fd: Int32) -> URL? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        guard fcntl(fd, F_GETPATH, &buffer) != -1 else { return nil }
+        return buffer.withUnsafeBufferPointer { pointer in
+            pointer.baseAddress.map {
+                URL(fileURLWithFileSystemRepresentation: $0, isDirectory: true, relativeTo: nil)
+            }
+        }
+    }
+
+    private func sorted(_ list: [Track]) -> [Track] {
+        list.sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
+    }
+
+    // MARK: Folder resolution & migration
+
+    /// The user's chosen folder (resolved from a bookmark so it survives a
+    /// rename/move), or the default `~/Documents/Sonar/`.
+    static func resolveFolder(prefs: Preferences) -> URL {
+        let fm = FileManager.default
+
+        if let data = prefs.musicFolderBookmark {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: [],
+                                  relativeTo: nil, bookmarkDataIsStale: &stale) {
+                try? fm.createDirectory(at: url, withIntermediateDirectories: true)
+                if stale { prefs.musicFolderBookmark = try? url.bookmarkData() }
+                return url
+            }
+        }
+
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents")
+        let folder = docs.appendingPathComponent("Sonar", isDirectory: true)
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Bookmark even the default, so it too survives a rename.
+        prefs.musicFolderBookmark = try? folder.bookmarkData()
+        return folder
+    }
+
+    /// One-time move of tracks left in earlier storage locations into the
+    /// current folder, so nothing is orphaned when the location changes.
+    static func migrateLegacyFiles(into folder: URL) {
+        let fm = FileManager.default
+        var legacy: [URL] = []
+
+        if let music = fm.urls(for: .musicDirectory, in: .userDomainMask).first {
+            legacy.append(music.appendingPathComponent("Sonar", isDirectory: true))
+        }
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if fm.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) { break }
+            dir = dir.deletingLastPathComponent()
+        }
+        legacy.append(dir.appendingPathComponent("Music", isDirectory: true))
+
+        for source in legacy where source.standardizedFileURL.path != folder.standardizedFileURL.path {
+            guard let items = try? fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil,
+                                                          options: [.skipsHiddenFiles]) else { continue }
+            for item in items where audioExtensions.contains(item.pathExtension.lowercased()) {
+                let destination = folder.appendingPathComponent(item.lastPathComponent)
+                if !fm.fileExists(atPath: destination.path) {
+                    try? fm.moveItem(at: item, to: destination)
+                }
+            }
+        }
+    }
+}
