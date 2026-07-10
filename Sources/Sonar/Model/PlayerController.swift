@@ -240,34 +240,54 @@ final class PlayerController: ObservableObject {
 
     // MARK: Download
 
-    /// URLs waiting to download after the current one; downloads run one at a time.
-    @Published private(set) var downloadsLeft = 0
-    private var pendingDownloads: [String] = []
+    /// One URL sitting in the download queue, staying put (and visible as a chip)
+    /// for its whole lifetime — added on submit, removed only once it finishes.
+    struct DownloadItem: Identifiable, Equatable {
+        let id = UUID()
+        let url: String
+    }
+
+    /// Everything waiting to download, including the one currently in flight
+    /// (always `downloadQueue.first` while `isProcessingDownloads`). Downloads
+    /// run one at a time; an item is removed only when its own download ends.
+    @Published private(set) var downloadQueue: [DownloadItem] = []
     private var isProcessingDownloads = false
+
+    var downloadsLeft: Int { downloadQueue.count }
+
+    /// The item currently being downloaded, if any — the UI uses this to lock
+    /// its chip against removal while the item's own download is in flight.
+    var currentDownloadID: DownloadItem.ID? {
+        isProcessingDownloads ? downloadQueue.first?.id : nil
+    }
 
     func downloadFromInput() { download(urlInput) }
 
     /// Enqueue one or many URLs (paste several separated by spaces/newlines).
+    /// URLs already queued (or mid-download) are skipped so the same link can't
+    /// be queued twice back-to-back.
     func download(_ text: String) {
+        var seen = Set(downloadQueue.map(\.url))
         let urls = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
             .map(String.init)
             .filter { $0.contains("http") }
-        guard !urls.isEmpty else { return }
-        pendingDownloads.append(contentsOf: urls)
+        let newItems: [DownloadItem] = urls.compactMap { url in
+            guard seen.insert(url).inserted else { return nil }
+            return DownloadItem(url: url)
+        }
+        guard !newItems.isEmpty else { return }
+        downloadQueue.append(contentsOf: newItems)
         urlInput = ""
-        refreshDownloadsLeft()
         processDownloads()
     }
 
     private func processDownloads() {
-        guard !isProcessingDownloads, !pendingDownloads.isEmpty else { return }
-        let url = pendingDownloads.removeFirst()
+        guard !isProcessingDownloads, let next = downloadQueue.first else { return }
         isProcessingDownloads = true
-        refreshDownloadsLeft()
         Task {
-            await runDownload(url)
+            await runDownload(next.url)
+            downloadQueue.removeAll { $0.id == next.id }
             isProcessingDownloads = false
-            refreshDownloadsLeft()
             processDownloads()          // next in the queue
         }
     }
@@ -286,14 +306,16 @@ final class PlayerController: ObservableObject {
         play(track)
     }
 
-    private func refreshDownloadsLeft() {
-        downloadsLeft = pendingDownloads.count + (isProcessingDownloads ? 1 : 0)
+    /// Drop one queued (not-yet-started) item. No-op for the active download —
+    /// use `cancelDownload()` to stop that.
+    func removeFromQueue(_ id: DownloadItem.ID) {
+        guard id != currentDownloadID else { return }
+        downloadQueue.removeAll { $0.id == id }
     }
 
     /// Cancel the current download and clear the whole queue.
     func cancelDownload() {
-        pendingDownloads.removeAll()
-        refreshDownloadsLeft()
+        downloadQueue.removeAll()
         downloader.cancel()
     }
 

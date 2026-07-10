@@ -869,8 +869,10 @@ struct PlayerWindow: View {
 
             // Chips sit in a reserved slot BELOW the field. The slot keeps a
             // fixed height in BOTH states (input and downloading) so nothing —
-            // not the field above nor anything below — ever shifts. While
-            // downloading the chips are already cleared, so it's just space.
+            // not the field above nor anything below — ever shifts. Queued
+            // chips stay put through their own download and disappear only
+            // once that item finishes, so the slot is only empty when there's
+            // truly nothing staged or in flight.
             chipsStrip
                 .frame(height: 24)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -889,32 +891,54 @@ struct PlayerWindow: View {
     private var chipsStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                // Staged: typed via ＋, not yet submitted — always removable.
                 ForEach(Array(urlChips.enumerated()), id: \.offset) { index, url in
-                    HStack(spacing: 5) {
-                        Image(systemName: "link").font(.system(size: 8, weight: .bold)).foregroundStyle(accent)
-                        Text(shortURL(url))
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(1)
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                urlChips = urlChips.enumerated().filter { $0.offset != index }.map(\.element)
-                            }
-                        } label: {
-                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.5))
-                        }
-                        .buttonStyle(.plain)
+                    urlChip(label: shortURL(url), active: false) {
+                        urlChips = urlChips.enumerated().filter { $0.offset != index }.map(\.element)
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
-                    .background(Capsule().fill(accent.opacity(0.14) as Color))
-                    .overlay(Capsule().stroke(accent.opacity(0.25) as Color))
-                    .transition(.scale.combined(with: .opacity))
+                }
+                // Queued/downloading: submitted, stays until its own download
+                // finishes. The active one can't be removed individually —
+                // use the cancel-all button next to the field for that.
+                ForEach(controller.downloadQueue) { item in
+                    let isActive = item.id == controller.currentDownloadID
+                    urlChip(label: shortURL(item.url), active: isActive) {
+                        controller.removeFromQueue(item.id)
+                    }
                 }
             }
             .padding(.horizontal, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One chip. `active` chips (currently downloading) show a spinner instead
+    /// of the link icon and drop their remove button.
+    private func urlChip(label: String, active: Bool, onRemove: @escaping () -> Void) -> some View {
+        HStack(spacing: 5) {
+            if active {
+                ProgressView().controlSize(.mini).scaleEffect(0.55).frame(width: 8, height: 8)
+            } else {
+                Image(systemName: "link").font(.system(size: 8, weight: .bold)).foregroundStyle(accent)
+            }
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+            if !active {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { onRemove() }
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(Capsule().fill(accent.opacity(0.14) as Color))
+        .overlay(Capsule().stroke(accent.opacity(0.25) as Color))
+        .transition(.scale.combined(with: .opacity))
     }
 
     private var canDownload: Bool {
@@ -926,9 +950,16 @@ struct PlayerWindow: View {
     }
 
     /// Turn the current field into a chip so another link can be added.
+    /// Skips URLs already staged or already queued/downloading.
     private func addURLChip() {
         let url = controller.urlInput.trimmingCharacters(in: .whitespaces)
         guard url.contains("http") else { return }
+        let taken = Set(urlChips).union(controller.downloadQueue.map(\.url))
+        guard !taken.contains(url) else {
+            controller.urlInput = ""
+            urlFieldFocused = true
+            return
+        }
         withAnimation(.easeInOut(duration: 0.2)) { urlChips.append(url) }
         controller.urlInput = ""
         urlFieldFocused = true
