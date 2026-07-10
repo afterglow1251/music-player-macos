@@ -55,6 +55,10 @@ final class SpectrumAnalyzer: @unchecked Sendable {
     /// Smoothed low-frequency energy (0...1), for artwork "breathing".
     private(set) var bassLevel: Float = 0
 
+    /// When false (paused/stopped), bars decay smoothly to zero instead of
+    /// freezing on stale samples.
+    var isRunning = false
+
     // MARK: Init
 
     init(barCount: Int = 19, fftSize: Int = 512) {
@@ -141,7 +145,8 @@ final class SpectrumAnalyzer: @unchecked Sendable {
         }
         lastRenderTime = time
 
-        let spectrum = computeSpectrum()
+        // When paused, target zero so bars/bass ease down smoothly.
+        let spectrum = isRunning ? computeSpectrum() : [Float](repeating: 0, count: barCount)
 
         for i in 0..<barCount {
             // Bars: jump up instantly, fall smoothly.

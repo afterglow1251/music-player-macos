@@ -5,6 +5,12 @@ enum RepeatMode: Int {
     case off = 0, all, one
 }
 
+enum SleepMode: Equatable {
+    case off
+    case timer(minutes: Int)
+    case endOfTrack
+}
+
 /// The top-level coordinator the UI observes. Owns the audio engine, the music
 /// library, the downloader and Now Playing; wires them together and persists
 /// playback preferences between launches.
@@ -54,6 +60,7 @@ final class PlayerController: ObservableObject {
         // Keep Now Playing in sync with play/pause, and remember the position
         // whenever playback pauses/resumes/stops (cheap, no timer).
         engine.$isPlaying
+            .dropFirst()
             .sink { [weak self] _ in
                 self?.updateNowPlaying()
                 self?.save()
@@ -71,7 +78,18 @@ final class PlayerController: ObservableObject {
         library.$tracks.filter { !$0.isEmpty }.first()
             .sink { [weak self] tracks in self?.restoreLastTrack(from: tracks) }
             .store(in: &cancellables)
+
+        // Persist the position every few seconds while playing, so it survives
+        // any kind of close (⌘Q, crash, kill) without a per-frame cost.
+        persistTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.engine.isPlaying else { return }
+                self.save()
+            }
+        }
     }
+
+    private var persistTimer: Timer?
 
     // MARK: Playback
 
@@ -92,6 +110,11 @@ final class PlayerController: ObservableObject {
     }
 
     func next(auto: Bool = false) {
+        // Sleep "until end of track": stop here instead of advancing.
+        if auto, sleepMode == .endOfTrack {
+            setSleep(.off)
+            return
+        }
         guard !library.tracks.isEmpty else { return }
         if auto, repeatMode == .one, let track = currentTrack { play(track); return }
 
@@ -199,8 +222,12 @@ final class PlayerController: ObservableObject {
         defaults.set(shuffle, forKey: "shuffle")
         defaults.set(repeatMode.rawValue, forKey: "repeatMode")
         defaults.set(themeIndex, forKey: "themeIndex")
-        defaults.set(currentTrack?.url.path, forKey: "lastTrack")
-        defaults.set(engine.currentTime, forKey: "lastPosition")
+        // Only touch the last track/position when something is actually loaded —
+        // otherwise a save while idle would wipe the value we want to restore.
+        if let track = currentTrack {
+            defaults.set(track.url.path, forKey: "lastTrack")
+            defaults.set(engine.currentTime, forKey: "lastPosition")
+        }
     }
 
     private func restorePreferences() {
@@ -220,18 +247,55 @@ final class PlayerController: ObservableObject {
         guard currentTrack == nil,
               let path = defaults.string(forKey: "lastTrack"),
               let track = tracks.first(where: { $0.url.path == path }) else { return }
+        // Read the saved position BEFORE loading — engine.load() calls stop(),
+        // which resets currentTime to 0 and would clobber the stored value.
+        let position = defaults.double(forKey: "lastPosition")
         currentTrack = track
         engine.load(url: track.url, autoplay: false)
-        // Resume from where we left off.
-        let position = defaults.double(forKey: "lastPosition")
         if position > 1 { engine.seek(to: position) }
         updateNowPlaying()
     }
 
-    // MARK: Seek
+    // MARK: Seek & volume (keyboard)
 
     func seekBy(_ delta: TimeInterval) {
         guard engine.duration > 0 else { return }
         engine.seek(to: min(max(engine.currentTime + delta, 0), engine.duration))
+    }
+
+    func adjustVolume(_ delta: Float) {
+        engine.volume = min(max(engine.volume + delta, 0), 1)
+    }
+
+    // MARK: Sleep timer
+
+    @Published private(set) var sleepMode: SleepMode = .off
+    @Published private(set) var sleepRemaining: TimeInterval?  // seconds left (timer mode)
+    private var sleepTimer: Timer?
+
+    func setSleep(_ mode: SleepMode) {
+        sleepTimer?.invalidate()
+        sleepTimer = nil
+        sleepMode = mode
+        switch mode {
+        case .off, .endOfTrack:
+            sleepRemaining = nil
+        case .timer(let minutes):
+            sleepRemaining = TimeInterval(max(1, minutes) * 60)
+            sleepTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.tickSleep() }
+            }
+        }
+    }
+
+    private func tickSleep() {
+        guard let remaining = sleepRemaining else { return }
+        let next = remaining - 1
+        if next <= 0 {
+            engine.pause()
+            setSleep(.off)
+        } else {
+            sleepRemaining = next
+        }
     }
 }

@@ -128,6 +128,7 @@ final class AudioEngine: ObservableObject {
             if !engine.isRunning { try engine.start() }
             player.play()
             isPlaying = true
+            analyzer.isRunning = true
             startProgressTimer()
         } catch {
             NSLog("[WinampMac] play() failed: \(error)")
@@ -138,6 +139,7 @@ final class AudioEngine: ObservableObject {
     func pause() {
         player.pause()
         isPlaying = false
+        analyzer.isRunning = false
         stopProgressTimer()
     }
 
@@ -148,6 +150,7 @@ final class AudioEngine: ObservableObject {
     func stop() {
         player.stop()
         isPlaying = false
+        analyzer.isRunning = false
         stopProgressTimer()
         currentTime = 0
         seekFrame = 0

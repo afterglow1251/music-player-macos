@@ -30,10 +30,8 @@ struct PlayerWindow: View {
             // visible — theme/EQ changes preview live while the panel is open.
             if showSettings {
                 SettingsView(controller: controller, accent: accent,
-                             width: contentWidth, height: artHeight) {
-                    withAnimation(.easeInOut(duration: 0.22)) { showSettings = false }
-                }
-                .transition(.opacity)
+                             width: contentWidth, height: artHeight)
+                    .transition(.opacity)
             } else {
                 heroArt
             }
@@ -71,12 +69,18 @@ struct PlayerWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             controller.saveOnQuit()
         }
-        // ⌥← / ⌥→ seek by 10s (Option avoids clashing with typing in fields).
+        // Arrow keys: ← → seek ±10s, ↑ ↓ volume. Only active when no text field
+        // is focused, so arrows still edit text in the URL/search fields.
         .background {
-            Button("") { controller.seekBy(-10) }
-                .keyboardShortcut(.leftArrow, modifiers: .option).hidden()
-            Button("") { controller.seekBy(10) }
-                .keyboardShortcut(.rightArrow, modifiers: .option).hidden()
+            if !urlFieldFocused && !searchFieldFocused {
+                Group {
+                    Button("") { controller.seekBy(-10) }.keyboardShortcut(.leftArrow, modifiers: [])
+                    Button("") { controller.seekBy(10) }.keyboardShortcut(.rightArrow, modifiers: [])
+                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: [])
+                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: [])
+                }
+                .hidden()
+            }
         }
         // Don't let the URL field grab the cursor on launch.
         .onAppear {
@@ -99,9 +103,10 @@ struct PlayerWindow: View {
     private var heroArt: some View {
         // The artwork gently "breathes" with the bass while playing.
         TimelineView(.animation) { _ in
+            // bassLevel eases to 0 when paused, so the scale glides back to 1
+            // smoothly instead of snapping.
             let bass = CGFloat(min(max(engine.analyzer.bassLevel, 0), 1))
-            let scale = engine.isPlaying ? 1 + bass * 0.035 : 1
-            artworkContent.scaleEffect(scale)
+            artworkContent.scaleEffect(1 + bass * 0.035)
         }
         .frame(width: contentWidth, height: artHeight)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -258,6 +263,11 @@ struct PlayerWindow: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
+            if let remaining = controller.sleepRemaining {
+                sleepBadge(timeString(remaining))
+            } else if controller.sleepMode == .endOfTrack {
+                sleepBadge("track end")
+            }
             Spacer()
             Button {
                 withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
@@ -273,6 +283,14 @@ struct PlayerWindow: View {
             .help("Settings — theme & equalizer (⌘,)")
         }
         .frame(height: 24)
+    }
+
+    private func sleepBadge(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "moon.fill").font(.system(size: 9))
+            Text(text).font(.system(size: 10, weight: .semibold, design: .rounded))
+        }
+        .foregroundStyle(accent)
     }
 
     private func chip(icon: String, active: Bool, help: String, action: @escaping () -> Void) -> some View {
@@ -292,19 +310,9 @@ struct PlayerWindow: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-            ZStack(alignment: .leading) {
-                if searchText.isEmpty {
-                    Text("Search library…")
-                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.4))
-                        .allowsHitTesting(false)
-                }
-                TextField("", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white)
-                    .focusEffectDisabled()
-                    .focused($searchFieldFocused)
-            }
+            SteadyTextField(placeholder: "Search library…",
+                            text: $searchText,
+                            focus: $searchFieldFocused)
             if !searchText.isEmpty {
                 Button { searchText = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(.white.opacity(0.4))
@@ -339,26 +347,13 @@ struct PlayerWindow: View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: "link").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-                ZStack(alignment: .leading) {
-                    // Custom, static placeholder — the native one shifts ~1px
-                    // between edited/empty states, which looked like jitter.
-                    if controller.urlInput.isEmpty {
-                        Text("Paste a YouTube URL…")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .allowsHitTesting(false)
-                    }
-                    TextField("", text: $controller.urlInput)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white)
-                        .focusEffectDisabled()
-                        .focused($urlFieldFocused)
-                        .onSubmit {
-                            controller.downloadFromInput()
-                            urlFieldFocused = false
-                        }
-                }
+                SteadyTextField(placeholder: "Paste a YouTube URL…",
+                                text: $controller.urlInput,
+                                onSubmit: {
+                                    controller.downloadFromInput()
+                                    urlFieldFocused = false
+                                },
+                                focus: $urlFieldFocused)
                 Button {
                     controller.downloadFromInput()
                 } label: {
