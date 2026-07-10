@@ -20,6 +20,9 @@ struct VisualizerView: View {
     /// `count * columnScale` columns, so a wide (fullscreen) layout doesn't stretch
     /// the handful of bars into grotesquely wide blocks. 1 = raw bars (small window).
     var columnScale: Int = 1
+    /// Transparent background so the tiles blend onto whatever's behind them
+    /// (a blurred cover in fullscreen) instead of a hard black box.
+    var transparentBackground: Bool = false
 
     private let tileGap: CGFloat = 1 // 1px gap => the "tiles" look
 
@@ -28,8 +31,9 @@ struct VisualizerView: View {
         // animating a still visualization.
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying)) { timeline in
             Canvas { context, size in
-                let bg = Palette.background
-                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(bg))
+                if !transparentBackground {
+                    context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Palette.background))
+                }
 
                 switch mode {
                 case .spectrum:
@@ -39,7 +43,7 @@ struct VisualizerView: View {
                 }
             }
         }
-        .background(Palette.background)
+        .background(transparentBackground ? Color.clear : Palette.background)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             // Double-click flips modes, just like the real thing.

@@ -71,25 +71,6 @@ final class MusicLibrary: ObservableObject {
         applyManual(updated)
     }
 
-    /// Move the track with `path` to sit just before `target` (drag-and-drop).
-    func move(path: String, before target: Track) {
-        guard let from = tracks.firstIndex(where: { $0.url.path == path }),
-              tracks[from] != target else { return }
-        var updated = tracks
-        let item = updated.remove(at: from)
-        let insertAt = updated.firstIndex(of: target) ?? updated.count
-        updated.insert(item, at: insertAt)
-        applyManual(updated)
-    }
-
-    /// Move the track with `path` to the very end (drop past the last row).
-    func moveToEnd(path: String) {
-        guard let from = tracks.firstIndex(where: { $0.url.path == path }), from != tracks.count - 1 else { return }
-        var updated = tracks
-        updated.append(updated.remove(at: from))
-        applyManual(updated)
-    }
-
     private func applyManual(_ list: [Track]) {
         tracks = list
         prefs.libraryOrder = list.map(\.url.path)

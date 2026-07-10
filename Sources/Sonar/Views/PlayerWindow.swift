@@ -12,14 +12,18 @@ struct PlayerWindow: View {
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
     @State private var seekHoverX: CGFloat?   // cursor x over the position slider
-    @State private var queueEndTargeted = false
-    // Gesture-driven library reorder (no system drag → no lag, no stray files).
-    @State private var libFrames: [String: CGRect] = [:]
-    @State private var libDragging: String?
-    @State private var libDragCursorY: CGFloat = 0
+    // Gesture-driven reorder, shared by library & queue (ids never collide:
+    // library rows key on file path, queue rows on a UUID string).
+    @State private var rowFrames: [String: CGRect] = [:]
+    @State private var draggingID: String?
+    @State private var dragCursorY: CGFloat = 0
+    // Grouping (auto by artist for now).
+    @State private var groupByArtist = false
+    @State private var collapsedGroups: Set<String> = []
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var searchActive = false
+    @State private var urlChips: [String] = []   // links queued via the ＋ button
     @State private var isDropTargeted = false
     /// Decoded once per track (not per frame) so the breathing animation doesn't
     /// re-decode the artwork 30×/sec.
@@ -50,6 +54,12 @@ struct PlayerWindow: View {
         // fullscreen too, where normalContent isn't in the tree.
         .onAppear { decodeArtwork(controller.currentTrack) }
         .onChange(of: controller.currentTrack) { _, track in decodeArtwork(track) }
+        // Also re-decode when only the artwork changes (same track, metadata just
+        // finished loading after a download) — same-url tracks compare equal, so
+        // the change above wouldn't fire.
+        .onChange(of: controller.currentTrack?.artworkData) { _, _ in
+            decodeArtwork(controller.currentTrack)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
             isFullscreen = true
         }
@@ -303,7 +313,8 @@ struct PlayerWindow: View {
 
     private var visualizerStrip: some View {
         VisualizerView(engine: engine, mode: $visualizerMode, theme: controller.theme,
-                       rows: isFullscreen ? 22 : 16, columnScale: isFullscreen ? 2 : 1)
+                       rows: isFullscreen ? 22 : 16, columnScale: isFullscreen ? 2 : 1,
+                       transparentBackground: isFullscreen)
             .frame(height: isFullscreen ? 88 : 48)
             .frame(maxWidth: .infinity)
     }
@@ -533,6 +544,16 @@ struct PlayerWindow: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
                 Spacer()
+                if !controller.library.tracks.isEmpty {
+                    Button { withAnimation(.easeInOut(duration: 0.2)) { groupByArtist.toggle() } } label: {
+                        Image(systemName: "person.2")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(groupByArtist ? accent : .white.opacity(0.55))
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .tooltip(groupByArtist ? "Ungroup" : "Group by artist")
+                }
                 Button { controller.library.revealInFinder() } label: {
                     Image(systemName: "folder").font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
@@ -584,23 +605,6 @@ struct PlayerWindow: View {
         .padding(.vertical, 2)
     }
 
-    /// A slim drop area below the last row so a track can be dragged to the very
-    /// end; shows the same accent line when a drag hovers it.
-    private func endDropZone(targeted: Binding<Bool>, onDrop: @escaping (String) -> Void) -> some View {
-        Color.clear
-            .frame(height: 16)
-            .overlay(alignment: .top) {
-                if targeted.wrappedValue {
-                    Capsule().fill(accent).frame(height: 2.5).padding(.horizontal, 6)
-                }
-            }
-            .dropDestination(for: String.self) { items, _ in
-                guard let source = items.first else { return false }
-                onDrop(source)
-                return true
-            } isTargeted: { targeted.wrappedValue = $0 }
-    }
-
     private func trackScroll(fixedHeight: CGFloat?) -> some View {
         ScrollView {
             LazyVStack(spacing: 2) {
@@ -608,22 +612,20 @@ struct PlayerWindow: View {
                 if !controller.queue.isEmpty && !searchActive {
                     queueHeader
                     ForEach(Array(controller.queue.enumerated()), id: \.element.id) { index, item in
+                        let qid = item.id.uuidString
                         QueueRowView(
                             track: item.track,
                             position: index + 1,
                             onRemove: {
                                 withAnimation(.easeInOut(duration: 0.2)) { controller.removeFromQueue(item) }
                             },
-                            reorderID: item.id.uuidString,
-                            onDropReorder: { source in
-                                guard let uid = UUID(uuidString: source) else { return }
-                                withAnimation(.easeInOut(duration: 0.2)) { controller.moveQueue(id: uid, before: item) }
-                            }
+                            reorderID: qid,
+                            isDragging: draggingID == qid,
+                            onReorderChanged: { y in handleQueueReorder(id: qid, cursorY: y) },
+                            onReorderEnded: { withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil } }
                         )
-                    }
-                    endDropZone(targeted: $queueEndTargeted) { source in
-                        guard let uid = UUID(uuidString: source) else { return }
-                        withAnimation(.easeInOut(duration: 0.2)) { controller.moveQueueToEnd(id: uid) }
+                        .modifier(ReorderDragModifier(id: qid, draggingID: draggingID,
+                                                      cursorY: dragCursorY, frames: rowFrames))
                     }
                     Divider().overlay(Color.white.opacity(0.08))
                         .padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 2)
@@ -634,55 +636,120 @@ struct PlayerWindow: View {
                 } else if filteredTracks.isEmpty {
                     emptyMessage("No tracks match “\(searchText)”")
                 }
-                ForEach(filteredTracks) { track in
-                    let path = track.url.path
-                    TrackRowView(
-                        track: track,
-                        isCurrent: controller.currentTrack == track,
-                        isPlaying: engine.isPlaying,
-                        durationText: timeString(track.duration),
-                        onTap: { controller.play(track) },
-                        onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
-                        onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
-                        onDelete: { controller.delete(track) },
-                        queueHasItems: !controller.queue.isEmpty,
-                        // Reorder only when not searching.
-                        reorderID: searchText.isEmpty ? path : nil,
-                        isDragging: libDragging == path,
-                        onReorderChanged: { y in handleLibraryReorder(path: path, cursorY: y) },
-                        onReorderEnded: {
-                            controller.library.commitOrder()
-                            withAnimation(.easeInOut(duration: 0.18)) { libDragging = nil }
+                if groupByArtist && searchText.isEmpty {
+                    // Collapsible auto-group sections, each playable as its own scope.
+                    ForEach(artistSections) { section in
+                        groupHeader(section)
+                        if !collapsedGroups.contains(section.id) {
+                            ForEach(section.tracks) { track in
+                                libraryRow(track, reorderID: nil, scope: section.tracks)
+                            }
                         }
-                    )
-                    // The dragged row follows the cursor; its slot's midY drives the
-                    // offset so it stays glued to the finger as others shift.
-                    .offset(y: libDragging == path ? libDragCursorY - (libFrames[path]?.midY ?? libDragCursorY) : 0)
-                    .zIndex(libDragging == path ? 1 : 0)
-                    .background(GeometryReader { proxy in
-                        Color.clear.preference(key: RowFrameKey.self,
-                                               value: [path: proxy.frame(in: .named("reorder"))])
-                    })
+                    }
+                } else {
+                    ForEach(filteredTracks) { track in
+                        libraryRow(track, reorderID: searchText.isEmpty ? track.url.path : nil)
+                    }
                 }
             }
             .padding(.horizontal, 6).padding(.vertical, 6)
             .coordinateSpace(.named("reorder"))
-            .onPreferenceChange(RowFrameKey.self) { libFrames = $0 }
+            .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
         }
         .frame(height: fixedHeight)
         .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
         .scrollIndicators(.hidden)
     }
 
+    /// One library row. `reorderID` non-nil enables drag; `scope` is the list that
+    /// playing this row plays through (a section's tracks, or the whole library).
+    private func libraryRow(_ track: Track, reorderID: String?, scope: [Track]? = nil) -> some View {
+        let path = track.url.path
+        return TrackRowView(
+            track: track,
+            isCurrent: controller.currentTrack == track,
+            isPlaying: engine.isPlaying,
+            durationText: timeString(track.duration),
+            onTap: { controller.play(track, in: scope) },
+            onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
+            onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
+            onDelete: { controller.delete(track) },
+            queueHasItems: !controller.queue.isEmpty,
+            reorderID: reorderID,
+            isDragging: draggingID == path,
+            onReorderChanged: { y in handleLibraryReorder(path: path, cursorY: y) },
+            onReorderEnded: {
+                controller.library.commitOrder()
+                withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
+            }
+        )
+        .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
+                                      cursorY: dragCursorY, frames: rowFrames,
+                                      enabled: reorderID != nil))
+    }
+
+    // MARK: Auto-groups (by artist)
+
+    private var artistSections: [LibrarySection] {
+        Dictionary(grouping: filteredTracks) { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
+            .map { LibrarySection(id: $0.key, tracks: $0.value) }
+            .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
+    }
+
+    private func groupHeader(_ section: LibrarySection) -> some View {
+        let collapsed = collapsedGroups.contains(section.id)
+        return HStack(spacing: 8) {
+            Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 14)
+            Text(section.id)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1)
+            Text("\(section.tracks.count)")
+                .font(.system(size: 10, design: .rounded))
+                .foregroundStyle(.white.opacity(0.35))
+            Spacer()
+            Button { controller.playGroup(section.tracks) } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(accent)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle())
+            .tooltip("Play")
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                if collapsed { collapsedGroups.remove(section.id) } else { collapsedGroups.insert(section.id) }
+            }
+        }
+    }
+
     /// Reorder the library live from the cursor's y position — pure math, so the
     /// insertion never lags behind the finger.
     private func handleLibraryReorder(path: String, cursorY: CGFloat) {
-        if libDragging != path { libDragging = path }
-        libDragCursorY = cursorY
+        if draggingID != path { draggingID = path }
+        dragCursorY = cursorY
         let others = filteredTracks.filter { $0.url.path != path }
-        let target = others.filter { (libFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
+        let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
         if controller.library.tracks.firstIndex(where: { $0.url.path == path }) != target {
             withAnimation(.easeInOut(duration: 0.18)) { controller.library.reorder(path: path, toIndex: target) }
+        }
+    }
+
+    /// Reorder the queue live from the cursor's y position.
+    private func handleQueueReorder(id: String, cursorY: CGFloat) {
+        if draggingID != id { draggingID = id }
+        dragCursorY = cursorY
+        guard let uid = UUID(uuidString: id) else { return }
+        let others = controller.queue.filter { $0.id.uuidString != id }
+        let target = others.filter { (rowFrames[$0.id.uuidString]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
+        if controller.queue.firstIndex(where: { $0.id == uid }) != target {
+            withAnimation(.easeInOut(duration: 0.18)) { controller.reorderQueue(id: uid, toIndex: target) }
         }
     }
 
@@ -715,52 +782,170 @@ struct PlayerWindow: View {
     // MARK: Download bar (YouTube URL → mp3)
 
     private var downloadBar: some View {
-        VStack(spacing: 6) {
+        let downloading = controller.downloadsLeft > 0
+        return VStack(spacing: 6) {
+            // Links queued via ＋, shown as compact chips before downloading starts.
+            if !downloading && !urlChips.isEmpty {
+                chipsStrip.transition(.opacity)
+            }
             HStack(spacing: 8) {
-                Image(systemName: "link").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-                SteadyTextField(placeholder: "Paste a YouTube URL…",
-                                text: $controller.urlInput,
-                                onSubmit: {
-                                    controller.downloadFromInput()
-                                    urlFieldFocused = false
-                                },
-                                focus: $urlFieldFocused)
-                Button {
-                    controller.downloadFromInput()
-                } label: {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(controller.downloader.isDownloading ? .white.opacity(0.3) : accent)
+                // Spinner while downloading, link icon otherwise.
+                Group {
+                    if downloading {
+                        ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14)
+                    } else {
+                        Image(systemName: "link").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                    }
                 }
-                .buttonStyle(PressableButtonStyle())
-                .disabled(controller.downloader.isDownloading || !controller.downloader.isAvailable)
-                .help("Download to Music/")
+                .frame(width: 16)
+
+                // The field morphs into the status text in place — same height,
+                // so nothing below ever shifts.
+                ZStack(alignment: .leading) {
+                    if downloading {
+                        AnimatedStatusText(status: controller.downloader.status)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.75))
+                    } else {
+                        SteadyTextField(placeholder: urlChips.isEmpty ? "Paste a YouTube URL…" : "Add another…",
+                                        text: $controller.urlInput,
+                                        onSubmit: { startDownload() },
+                                        focus: $urlFieldFocused)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if downloading {
+                    // How many are still queued behind the current one.
+                    if controller.downloadsLeft > 1 {
+                        Text("\(controller.downloadsLeft)")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.black)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .padding(.horizontal, 3)
+                            .background(Capsule().fill(accent))
+                            .help("\(controller.downloadsLeft) downloads left")
+                    }
+                    Button { controller.cancelDownload() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18)).foregroundStyle(.white.opacity(0.5))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Cancel all")
+                } else {
+                    // ＋ turns the current URL into a chip so you can add another.
+                    if controller.urlInput.contains("http") {
+                        Button { addURLChip() } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .help("Add another link")
+                    }
+                    Button { startDownload() } label: {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(canDownload ? accent : .white.opacity(0.3))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .disabled(!canDownload)
+                    .help(urlChips.isEmpty ? "Download" : "Download \(pendingURLCount)")
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(Capsule().fill(.white.opacity(0.08)))
-
-            if controller.downloader.isDownloading {
-                HStack(spacing: 8) {
-                    ProgressView(value: controller.downloader.progress).tint(accent)
-                    AnimatedStatusText(status: controller.downloader.status)
-                        .font(.system(size: 10, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .frame(width: 118, alignment: .trailing)
-                    Button { controller.cancelDownload() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13)).foregroundStyle(.white.opacity(0.5))
+            .background(
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.08))
+                    // The capsule fills with accent as the download progresses.
+                    if downloading {
+                        GeometryReader { geo in
+                            Capsule()
+                                .fill(accent.opacity(0.22))
+                                .frame(width: max(0, geo.size.width * controller.downloader.progress))
+                                .animation(.easeOut(duration: 0.3), value: controller.downloader.progress)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .help("Cancel")
                 }
-            } else if !controller.downloader.isAvailable {
+                .clipShape(Capsule())
+            )
+
+            if !downloading && !controller.downloader.isAvailable {
                 Text("yt-dlp not found — run: brew install yt-dlp")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: downloading)
+    }
+
+    private var chipsStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Array(urlChips.enumerated()), id: \.offset) { index, url in
+                    HStack(spacing: 5) {
+                        Image(systemName: "link").font(.system(size: 8, weight: .bold)).foregroundStyle(accent)
+                        Text(shortURL(url))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(1)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                urlChips = urlChips.enumerated().filter { $0.offset != index }.map(\.element)
+                            }
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(Capsule().fill(accent.opacity(0.14) as Color))
+                    .overlay(Capsule().stroke(accent.opacity(0.25) as Color))
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var canDownload: Bool {
+        controller.downloader.isAvailable && (!urlChips.isEmpty || controller.urlInput.contains("http"))
+    }
+
+    private var pendingURLCount: Int {
+        urlChips.count + (controller.urlInput.contains("http") ? 1 : 0)
+    }
+
+    /// Turn the current field into a chip so another link can be added.
+    private func addURLChip() {
+        let url = controller.urlInput.trimmingCharacters(in: .whitespaces)
+        guard url.contains("http") else { return }
+        withAnimation(.easeInOut(duration: 0.2)) { urlChips.append(url) }
+        controller.urlInput = ""
+        urlFieldFocused = true
+    }
+
+    /// Enqueue every chip plus whatever is in the field.
+    private func startDownload() {
+        let all = (urlChips + [controller.urlInput])
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !all.isEmpty else { return }
+        controller.download(all.joined(separator: "\n"))
+        withAnimation(.easeInOut(duration: 0.2)) { urlChips = [] }
+        urlFieldFocused = false
+    }
+
+    /// A compact label for a chip: the YouTube id if present, else the host.
+    private func shortURL(_ url: String) -> String {
+        if let match = url.firstMatch(of: /(?:v=|youtu\.be\/|shorts\/)([A-Za-z0-9_-]{11})/) {
+            return "▶ \(match.1)"
+        }
+        return URL(string: url)?.host ?? String(url.prefix(22))
     }
 
     // MARK: Now-playing text

@@ -110,6 +110,12 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
+/// A named group of tracks shown as a collapsible section in the library.
+struct LibrarySection: Identifiable {
+    let id: String        // artist name / playlist name
+    let tracks: [Track]
+}
+
 /// A 6-dot drag handle (2 columns × 3 rows), the affordance for reordering.
 struct DragDots: View {
     var body: some View {
@@ -244,16 +250,44 @@ struct RowFrameKey: PreferenceKey {
     }
 }
 
+/// Applied to a reorderable row: reports its frame, lifts it above the others
+/// while dragging, and offsets it to follow the cursor (its slot's midY keeps it
+/// glued to the finger as the rest shift).
+struct ReorderDragModifier: ViewModifier {
+    let id: String
+    let draggingID: String?
+    let cursorY: CGFloat
+    let frames: [String: CGRect]
+    /// When false (e.g. grouped view), do nothing — no frame reporting, so
+    /// expanding a section doesn't churn preferences and flicker.
+    var enabled: Bool = true
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .offset(y: draggingID == id ? cursorY - (frames[id]?.midY ?? cursorY) : 0)
+                .zIndex(draggingID == id ? 1 : 0)
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: RowFrameKey.self,
+                                           value: [id: proxy.frame(in: .named("reorder"))])
+                })
+        } else {
+            content
+        }
+    }
+}
+
 /// One row in the "Up Next" queue — compact, numbered, with a remove button on hover.
 struct QueueRowView: View {
     let track: Track
     let position: Int
     let onRemove: () -> Void
     var reorderID: String? = nil
-    var onDropReorder: (String) -> Void = { _ in }
+    var isDragging: Bool = false
+    var onReorderChanged: (CGFloat) -> Void = { _ in }
+    var onReorderEnded: () -> Void = {}
 
     @State private var hovering = false
-    @State private var isDropTarget = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -267,12 +301,16 @@ struct QueueRowView: View {
                 .lineLimit(1)
             Spacer(minLength: 4)
             HStack(spacing: 8) {
-                if let reorderID {
+                if reorderID != nil {
                     DragDots()
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(.white.opacity(0.55))
                         .frame(width: 11, height: 18)
                         .contentShape(Rectangle())
-                        .draggable(reorderID)
+                        .gesture(
+                            DragGesture(coordinateSpace: .named("reorder"))
+                                .onChanged { onReorderChanged($0.location.y) }
+                                .onEnded { _ in onReorderEnded() }
+                        )
                         .help("Drag to reorder")
                 }
                 Button(action: onRemove) {
@@ -291,19 +329,12 @@ struct QueueRowView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(hovering ? Color.white.opacity(0.06) : .clear))
-        .overlay(alignment: .top) {
-            if isDropTarget {
-                Capsule().fill(Theme.accent).frame(height: 2.5).padding(.horizontal, 6)
-            }
-        }
+            .fill(isDragging ? Color(white: 0.16) : (hovering ? Color.white.opacity(0.06) : .clear)))
+        .scaleEffect(isDragging ? 1.02 : 1)
+        .shadow(color: isDragging ? .black.opacity(0.45) : .clear,
+                radius: isDragging ? 8 : 0, y: isDragging ? 4 : 0)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .dropDestination(for: String.self) { items, _ in
-            guard let source = items.first, let id = reorderID, source != id else { return false }
-            onDropReorder(source)
-            return true
-        } isTargeted: { isDropTarget = $0 && reorderID != nil }
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

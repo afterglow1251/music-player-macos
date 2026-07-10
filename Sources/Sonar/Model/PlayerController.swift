@@ -69,6 +69,22 @@ final class PlayerController: ObservableObject {
             child.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         }
 
+        // When the library rescans (e.g. a download finished writing its tags and
+        // artwork), refresh the now-playing track so its cover/title/duration
+        // update on their own — without needing a re-play.
+        library.$tracks
+            .sink { [weak self] tracks in
+                guard let self, let current = self.currentTrack,
+                      let updated = tracks.first(where: { $0.url == current.url }) else { return }
+                if updated.artworkData != current.artworkData
+                    || updated.title != current.title
+                    || updated.duration != current.duration {
+                    self.currentTrack = updated
+                    self.updateNowPlaying()
+                }
+            }
+            .store(in: &cancellables)
+
         // Keep Now Playing in sync with play/pause, and remember the position
         // whenever playback pauses/resumes/stops (cheap, no timer).
         engine.$isPlaying
@@ -105,11 +121,29 @@ final class PlayerController: ObservableObject {
 
     // MARK: Playback
 
-    func play(_ track: Track) {
+    /// The ordered list we're currently playing through. Playing a group/playlist
+    /// sets it to that group's tracks; a plain library tap resets it to the library.
+    private var scope: [Track] = []
+
+    /// Tracks that next/previous walk through: the active scope if it still holds
+    /// the current track, otherwise the whole library.
+    private var activeScope: [Track] {
+        if let track = currentTrack, scope.contains(track) { return scope }
+        return library.tracks
+    }
+
+    func play(_ track: Track, in scope: [Track]? = nil) {
+        self.scope = scope ?? library.tracks
         currentTrack = track
         engine.load(url: track.url)
         updateNowPlaying()
         save()
+    }
+
+    /// Play a whole group (playlist / artist section) as the new scope.
+    func playGroup(_ tracks: [Track]) {
+        guard let first = tracks.first else { return }
+        play(first, in: tracks)
     }
 
     /// Play/pause. If nothing is loaded yet, start the first track in the library.
@@ -127,35 +161,37 @@ final class PlayerController: ObservableObject {
             setSleep(.off)
             return
         }
-        if auto, repeatMode == .one, let track = currentTrack { play(track); return }
+        if auto, repeatMode == .one, let track = currentTrack { play(track, in: activeScope); return }
 
         // The queue overrides the normal order: play what the user lined up next.
         if !queue.isEmpty { play(queue.removeFirst().track); return }
 
-        guard !library.tracks.isEmpty else { return }
-        guard let index = currentIndex else { play(library.tracks[0]); return }
+        let list = activeScope
+        guard !list.isEmpty else { return }
+        guard let index = list.firstIndex(where: { $0 == currentTrack }) else { play(list[0], in: list); return }
 
         if shuffle {
-            play(randomTrack(excluding: index))
+            play(randomTrack(in: list, excluding: index), in: list)
             return
         }
         let nextIndex = index + 1
-        if nextIndex < library.tracks.count {
-            play(library.tracks[nextIndex])
+        if nextIndex < list.count {
+            play(list[nextIndex], in: list)
         } else if repeatMode == .all {
-            play(library.tracks[0])
+            play(list[0], in: list)
         } else if auto {
             engine.stop()                       // reached the end
         } else {
-            play(library.tracks[0])             // manual next wraps around
+            play(list[0], in: list)             // manual next wraps around
         }
     }
 
     func previous() {
         if engine.currentTime > 3 { engine.seek(to: 0); return }
-        guard !library.tracks.isEmpty, let index = currentIndex else { return }
-        if shuffle { play(randomTrack(excluding: index)); return }
-        play(library.tracks[index > 0 ? index - 1 : library.tracks.count - 1])
+        let list = activeScope
+        guard !list.isEmpty, let index = list.firstIndex(where: { $0 == currentTrack }) else { return }
+        if shuffle { play(randomTrack(in: list, excluding: index), in: list); return }
+        play(list[index > 0 ? index - 1 : list.count - 1], in: list)
     }
 
     func delete(_ track: Track) {
@@ -178,31 +214,21 @@ final class PlayerController: ObservableObject {
 
     func removeFromQueue(_ item: QueueItem) { queue.removeAll { $0.id == item.id } }
 
-    /// Drag-and-drop reorder: move the item with `id` to sit just before `target`.
-    func moveQueue(id: UUID, before target: QueueItem) {
-        guard let from = queue.firstIndex(where: { $0.id == id }), queue[from].id != target.id else { return }
+    /// Gesture reorder: move the queued item with `id` to `index` (queue is
+    /// ephemeral, so there's nothing to persist).
+    func reorderQueue(id: UUID, toIndex index: Int) {
+        guard let from = queue.firstIndex(where: { $0.id == id }) else { return }
         let item = queue.remove(at: from)
-        let insertAt = queue.firstIndex(of: target) ?? queue.count
-        queue.insert(item, at: insertAt)
-    }
-
-    func moveQueueToEnd(id: UUID) {
-        guard let from = queue.firstIndex(where: { $0.id == id }), from != queue.count - 1 else { return }
-        queue.append(queue.remove(at: from))
+        queue.insert(item, at: min(max(index, 0), queue.count))
     }
 
     func clearQueue() { queue.removeAll() }
 
-    private var currentIndex: Int? {
-        guard let track = currentTrack else { return nil }
-        return library.tracks.firstIndex(of: track)
-    }
-
-    private func randomTrack(excluding index: Int) -> Track {
-        guard library.tracks.count > 1 else { return library.tracks[index] }
+    private func randomTrack(in list: [Track], excluding index: Int) -> Track {
+        guard list.count > 1 else { return list[index] }
         var i = index
-        while i == index { i = Int.random(in: 0..<library.tracks.count) }
-        return library.tracks[i]
+        while i == index { i = Int.random(in: 0..<list.count) }
+        return list[i]
     }
 
     // MARK: EQ
@@ -214,30 +240,62 @@ final class PlayerController: ObservableObject {
 
     // MARK: Download
 
+    /// URLs waiting to download after the current one; downloads run one at a time.
+    @Published private(set) var downloadsLeft = 0
+    private var pendingDownloads: [String] = []
+    private var isProcessingDownloads = false
+
     func downloadFromInput() { download(urlInput) }
 
+    /// Enqueue one or many URLs (paste several separated by spaces/newlines).
     func download(_ text: String) {
-        let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
-        Task {
-            // Skip if we already have this exact video (matched by its id).
-            downloader.beginChecking()
-            if let videoID = await downloader.fetchVideoID(url),
-               let existing = library.tracks.first(where: { $0.videoID == videoID }) {
-                downloader.finishChecking(message: "Already in library")
-                urlInput = ""
-                play(existing)
-                return
-            }
+        let urls = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .map(String.init)
+            .filter { $0.contains("http") }
+        guard !urls.isEmpty else { return }
+        pendingDownloads.append(contentsOf: urls)
+        urlInput = ""
+        refreshDownloadsLeft()
+        processDownloads()
+    }
 
-            guard let fileURL = await downloader.download(url, into: library.folder) else { return }
-            let track = await library.add(fileURL)
-            urlInput = ""
-            play(track)
+    private func processDownloads() {
+        guard !isProcessingDownloads, !pendingDownloads.isEmpty else { return }
+        let url = pendingDownloads.removeFirst()
+        isProcessingDownloads = true
+        refreshDownloadsLeft()
+        Task {
+            await runDownload(url)
+            isProcessingDownloads = false
+            refreshDownloadsLeft()
+            processDownloads()          // next in the queue
         }
     }
 
-    func cancelDownload() { downloader.cancel() }
+    private func runDownload(_ url: String) async {
+        // Skip if we already have this exact video (matched by its id).
+        downloader.beginChecking()
+        if let videoID = await downloader.fetchVideoID(url),
+           let existing = library.tracks.first(where: { $0.videoID == videoID }) {
+            downloader.finishChecking(message: "Already in library")
+            play(existing)
+            return
+        }
+        guard let fileURL = await downloader.download(url, into: library.folder) else { return }
+        let track = await library.add(fileURL)
+        play(track)
+    }
+
+    private func refreshDownloadsLeft() {
+        downloadsLeft = pendingDownloads.count + (isProcessingDownloads ? 1 : 0)
+    }
+
+    /// Cancel the current download and clear the whole queue.
+    func cancelDownload() {
+        pendingDownloads.removeAll()
+        refreshDownloadsLeft()
+        downloader.cancel()
+    }
 
     // MARK: Now Playing
 

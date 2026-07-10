@@ -78,7 +78,11 @@ final class Downloader: ObservableObject {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        cancelled = false
+        // Don't reset `cancelled` here — it's cleared once per item in
+        // beginChecking(). If the user hit cancel during the checking phase, bail
+        // now instead of starting the download.
+        if cancelled { status = "Cancelled"; isDownloading = false; return nil }
+
         lastError = nil
         isDownloading = true
         progress = 0
@@ -89,6 +93,9 @@ final class Downloader: ObservableObject {
 
         let args = ["-x", "--audio-format", "mp3", "--audio-quality", "0",
                     "--no-playlist", "--embed-thumbnail", "--add-metadata",
+                    // Fill the artist tag from the channel when the video has no
+                    // artist of its own (keeps a real artist tag where present).
+                    "--parse-metadata", "%(artist,uploader)s:%(artist)s",
                     "--newline",
                     "--ffmpeg-location", toolsDir,
                     "-o", folder.appendingPathComponent("%(title)s [%(id)s].%(ext)s").path,
@@ -121,7 +128,9 @@ final class Downloader: ObservableObject {
 
     private func run(executable: String, arguments: [String],
                      collect: (@Sendable (String) -> Void)? = nil) async -> Int32 {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
+        // Already cancelled before we even started — don't launch the process.
+        if cancelled { return -1 }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
