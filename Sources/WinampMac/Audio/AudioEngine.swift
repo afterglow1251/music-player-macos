@@ -37,10 +37,30 @@ final class AudioEngine: ObservableObject {
     /// Called when the current track plays to its end (for auto-advance).
     var onFinished: (() -> Void)?
 
+    // MARK: Equalizer
+
+    /// Standard 10-band center frequencies (Hz).
+    static let eqFrequencies: [Float] = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+
+    /// Per-band gain in dB (-12...+12). Setting this updates the audio units live.
+    @Published var eqGains: [Float] = Array(repeating: 0, count: 10) {
+        didSet { applyEQGains() }
+    }
+    @Published var eqEnabled: Bool = true {
+        didSet { applyEQGains() }
+    }
+
+    private func applyEQGains() {
+        for (i, band) in eq.bands.enumerated() where i < eqGains.count {
+            band.gain = eqEnabled ? eqGains[i] : 0
+        }
+    }
+
     // MARK: Engine
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
+    private let eq = AVAudioUnitEQ(numberOfBands: 10)
 
     private var audioFile: AVAudioFile?
     private var sampleRate: Double = 44_100
@@ -52,14 +72,29 @@ final class AudioEngine: ObservableObject {
 
     init() {
         engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: nil)
+        engine.attach(eq)
+        configureEQBands()
+        // Chain: player → EQ → main mixer. The tap sits on the mixer, so the
+        // visualizer reflects the equalized sound.
+        engine.connect(player, to: eq, format: nil)
+        engine.connect(eq, to: engine.mainMixerNode, format: nil)
         engine.mainMixerNode.outputVolume = volume
         installTap()
     }
 
+    private func configureEQBands() {
+        for (i, band) in eq.bands.enumerated() {
+            band.filterType = .parametric
+            band.frequency = Self.eqFrequencies[i]
+            band.bandwidth = 0.5
+            band.gain = 0
+            band.bypass = false
+        }
+    }
+
     // MARK: Loading
 
-    func load(url: URL) {
+    func load(url: URL, autoplay: Bool = true) {
         stop()
         do {
             let file = try AVAudioFile(forReading: url)
@@ -71,12 +106,15 @@ final class AudioEngine: ObservableObject {
             currentTime = 0
             trackTitle = url.deletingPathExtension().lastPathComponent.uppercased()
 
-            // Reconnect the player using the file's format so playback is correct.
+            // Reconnect the whole chain with the file's format so the EQ passes
+            // audio through correctly (a format mismatch silences the output).
             engine.disconnectNodeOutput(player)
-            engine.connect(player, to: engine.mainMixerNode, format: file.processingFormat)
+            engine.disconnectNodeOutput(eq)
+            engine.connect(player, to: eq, format: file.processingFormat)
+            engine.connect(eq, to: engine.mainMixerNode, format: file.processingFormat)
 
             schedule(from: 0)
-            play()
+            if autoplay { play() }
         } catch {
             trackTitle = "CANNOT OPEN FILE"
         }
@@ -92,6 +130,7 @@ final class AudioEngine: ObservableObject {
             isPlaying = true
             startProgressTimer()
         } catch {
+            NSLog("[WinampMac] play() failed: \(error)")
             isPlaying = false
         }
     }

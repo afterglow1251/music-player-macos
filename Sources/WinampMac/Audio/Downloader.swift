@@ -1,5 +1,13 @@
 import Foundation
 
+/// Thread-safe string accumulator for subprocess output collected off the main thread.
+private final class OutputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = ""
+    func append(_ text: String) { lock.lock(); storage += text; lock.unlock() }
+    var value: String { lock.lock(); defer { lock.unlock() }; return storage }
+}
+
 /// Downloads audio from a URL (YouTube etc.) by shelling out to `yt-dlp`,
 /// converting to mp3 with embedded artwork and metadata via `ffmpeg`.
 ///
@@ -10,9 +18,13 @@ final class Downloader: ObservableObject {
     @Published var isDownloading = false
     @Published var progress: Double = 0      // 0...1
     @Published var status: String = ""
+    /// Set on a failure so the UI can show a transient error toast.
+    @Published var lastError: String?
 
     private let ytDlpPath: String?
     private let toolsDir: String
+    private var currentProcess: Process?
+    private var cancelled = false
 
     init() {
         let candidates = ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp"]
@@ -22,15 +34,51 @@ final class Downloader: ObservableObject {
 
     var isAvailable: Bool { ytDlpPath != nil }
 
+    /// Cancel the in-flight download, if any.
+    func cancel() {
+        cancelled = true
+        currentProcess?.terminate()
+    }
+
+    func beginChecking() {
+        cancelled = false
+        lastError = nil
+        isDownloading = true
+        progress = 0
+        status = "Checking…"
+    }
+
+    func finishChecking(message: String) {
+        isDownloading = false
+        status = message
+    }
+
+    /// Fetch just the title (no download) so callers can dedupe against the library.
+    func fetchTitle(_ urlString: String) async -> String? {
+        guard let ytDlpPath else { return nil }
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let output = OutputBox()
+        _ = await run(executable: ytDlpPath,
+                      arguments: ["--print", "%(title)s", "--skip-download", "--no-playlist", trimmed],
+                      collect: { output.append($0) })
+        let title = output.value.split(separator: "\n").first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (title?.isEmpty == false) ? title : nil
+    }
+
     /// Download `urlString` into `folder`. Returns the new mp3's URL on success.
     func download(_ urlString: String, into folder: URL) async -> URL? {
         guard let ytDlpPath else {
-            status = "yt-dlp not installed (brew install yt-dlp)"
+            lastError = "yt-dlp not installed (brew install yt-dlp)"
+            status = lastError!
             return nil
         }
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
+        cancelled = false
+        lastError = nil
         isDownloading = true
         progress = 0
         status = "Preparing…"
@@ -46,8 +94,13 @@ final class Downloader: ObservableObject {
                     trimmed]
 
         let code = await run(executable: ytDlpPath, arguments: args)
+        if cancelled {
+            status = "Cancelled"
+            return nil
+        }
         guard code == 0 else {
-            status = "Download failed (code \(code))"
+            lastError = "Download failed — check the URL or run: brew upgrade yt-dlp"
+            status = "Failed"
             return nil
         }
 
@@ -65,7 +118,8 @@ final class Downloader: ObservableObject {
 
     // MARK: Subprocess
 
-    private func run(executable: String, arguments: [String]) async -> Int32 {
+    private func run(executable: String, arguments: [String],
+                     collect: (@Sendable (String) -> Void)? = nil) async -> Int32 {
         await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
@@ -83,6 +137,7 @@ final class Downloader: ObservableObject {
             handle.readabilityHandler = { [weak self] fh in
                 let data = fh.availableData
                 guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                if let collect { collect(text) }
                 let percent = Downloader.parsePercent(text)
                 let converting = text.contains("[ExtractAudio]") || text.contains("Destination")
                 Task { @MainActor in
@@ -97,6 +152,7 @@ final class Downloader: ObservableObject {
                 continuation.resume(returning: proc.terminationStatus)
             }
 
+            currentProcess = process
             do {
                 try process.run()
             } catch {

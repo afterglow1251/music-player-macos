@@ -13,6 +13,7 @@ enum VisualizerMode {
 struct VisualizerView: View {
     @ObservedObject var engine: AudioEngine
     @Binding var mode: VisualizerMode
+    var theme: VisualizerTheme = .classic
 
     /// Logical (pre-scale) tile grid — mirrors Winamp's tiny vis window.
     private let rows = 16            // vertical tile levels
@@ -61,7 +62,7 @@ struct VisualizerView: View {
                 let rect = CGRect(x: x, y: y + tileGap,
                                   width: barWidth,
                                   height: max(1, tileHeight - tileGap))
-                context.fill(Path(rect), with: .color(WinampPalette.spectrumColor(row: tile, of: rows)))
+                context.fill(Path(rect), with: .color(theme.spectrumColor(row: tile, of: rows)))
             }
 
             // The falling peak marker (one tile, drawn even above the bar).
@@ -71,7 +72,7 @@ struct VisualizerView: View {
                 let rect = CGRect(x: x, y: y + tileGap,
                                   width: barWidth,
                                   height: max(1, tileHeight - tileGap))
-                context.fill(Path(rect), with: .color(WinampPalette.peak))
+                context.fill(Path(rect), with: .color(theme.peak))
             }
         }
     }
@@ -96,6 +97,6 @@ struct VisualizerView: View {
                 path.addLine(to: CGPoint(x: x, y: y))
             }
         }
-        context.stroke(path, with: .color(WinampPalette.oscilloscope), lineWidth: 1)
+        context.stroke(path, with: .color(theme.oscilloscope), lineWidth: 1)
     }
 }

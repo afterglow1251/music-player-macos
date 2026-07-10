@@ -52,6 +52,9 @@ final class SpectrumAnalyzer: @unchecked Sendable {
     private var peakVelocities: [Float]
     private var lastRenderTime: CFTimeInterval = 0
 
+    /// Smoothed low-frequency energy (0...1), for artwork "breathing".
+    private(set) var bassLevel: Float = 0
+
     // MARK: Init
 
     init(barCount: Int = 19, fftSize: Int = 512) {
@@ -157,6 +160,13 @@ final class SpectrumAnalyzer: @unchecked Sendable {
                 peakValues[i] = max(0, peakValues[i] - peakVelocities[i] * dt)
             }
         }
+
+        // Bass = mean of the lowest few bands, smoothed for a gentle pulse.
+        let bassBands = min(4, barCount)
+        var bass: Float = 0
+        for i in 0..<bassBands { bass += barValues[i] }
+        bass /= Float(bassBands)
+        bassLevel += (bass - bassLevel) * min(1, dt * 8)
 
         return Frame(bars: barValues, peaks: peakValues)
     }

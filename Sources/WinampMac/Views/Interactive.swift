@@ -59,22 +59,26 @@ struct TrackRowView: View {
                 }
             }
             Spacer(minLength: 4)
-            // On hover show a trash button; otherwise the duration.
-            if hovering {
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red.opacity(0.9))
-                        .frame(width: 42, alignment: .trailing)
+            // On hover show a trash button; otherwise the duration. Both live in a
+            // fixed-width slot so nothing shifts; the button scales around its own
+            // (small, centered) frame so it grows in place instead of drifting.
+            Group {
+                if hovering {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red.opacity(0.9))
+                            .frame(width: 22, height: 20)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Delete (move to Trash)")
+                } else {
+                    Text(durationText)
+                        .font(.system(size: 10, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.4))
                 }
-                .buttonStyle(PressableButtonStyle())
-                .help("Delete (move to Trash)")
-            } else {
-                Text(durationText)
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .frame(width: 42, alignment: .trailing)
             }
+            .frame(width: 44, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
