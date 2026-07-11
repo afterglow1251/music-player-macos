@@ -205,6 +205,14 @@ final class AudioEngine: ObservableObject {
     /// Seek to `time` seconds and keep playing if we were playing.
     func seek(to time: TimeInterval) {
         guard let file = audioFile else { return }
+        // If a next track was prescheduled and the node's real-time clock has
+        // already rolled into it, promote it first. Otherwise a seek landing
+        // right at the natural track boundary races the (still in-flight)
+        // completion callback: this call would invalidate it via `generation`
+        // and reschedule from the stale old track while the new one keeps
+        // audibly playing underneath.
+        reconcileIfAlreadyAdvanced()
+
         let wasPlaying = isPlaying
         // A seek is a hard reset of the node's timeline: invalidate any gapless
         // preschedule and clear the played-frames base before rescheduling.
@@ -271,22 +279,41 @@ final class AudioEngine: ObservableObject {
     /// real end-of-track with nothing queued, so signal auto-advance.
     private func segmentFinished(_ gen: Int) {
         guard gen == generation else { return }   // a flushed / stale segment
-        if let next = pendingAdvance {
-            basePlayed += currentFrames            // the node's clock keeps running
-            audioFile = next.file
-            totalFrames = next.frames
-            currentFrames = next.frames
-            duration = next.duration
-            sampleRate = next.sampleRate
-            seekFrame = 0
-            currentTime = 0
-            trackTitle = next.title
-            pendingAdvance = nil
-            didPreschedule = false
-            onAdvanced?(next.url)
+        if pendingAdvance != nil {
+            promoteAdvance()
         } else {
             onFinished?()
         }
+    }
+
+    /// If the node's real-time clock has already crossed into a prescheduled next
+    /// segment — even though `segmentFinished` hasn't run for it yet — catch our
+    /// Swift-level state up to reality. Called before a seek so it can't race the
+    /// completion callback and reschedule from a track that's no longer current.
+    private func reconcileIfAlreadyAdvanced() {
+        guard pendingAdvance != nil,
+              let nodeTime = player.lastRenderTime,
+              let playerTime = player.playerTime(forNodeTime: nodeTime),
+              playerTime.sampleTime - basePlayed >= currentFrames else { return }
+        promoteAdvance()
+    }
+
+    /// Promote the prescheduled next track to current, gaplessly — the audio is
+    /// already flowing; this only syncs the bookkeeping (duration, title, etc).
+    private func promoteAdvance() {
+        guard let next = pendingAdvance else { return }
+        basePlayed += currentFrames             // the node's clock keeps running
+        audioFile = next.file
+        totalFrames = next.frames
+        currentFrames = next.frames
+        duration = next.duration
+        sampleRate = next.sampleRate
+        seekFrame = 0
+        currentTime = 0
+        trackTitle = next.title
+        pendingAdvance = nil
+        didPreschedule = false
+        onAdvanced?(next.url)
     }
 
     // MARK: Progress
