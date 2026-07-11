@@ -110,12 +110,6 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
-/// A named group of tracks shown as a collapsible section in the library.
-struct LibrarySection: Identifiable {
-    let id: String        // artist name / playlist name
-    let tracks: [Track]
-}
-
 /// One entry in a row's "Add to Playlist ▸" submenu. `contains` marks playlists
 /// the track is already in (shown with a checkmark); `add` performs the insert.
 struct PlaylistMenuItem: Identifiable {

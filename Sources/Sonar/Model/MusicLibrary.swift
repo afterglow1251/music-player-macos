@@ -11,8 +11,8 @@ import AppKit
 final class MusicLibrary: ObservableObject {
     @Published private(set) var tracks: [Track] = []
     @Published private(set) var folder: URL
-    /// Current ordering (manual drag order, or sorted by a track field).
-    @Published private(set) var sort: LibrarySort
+    /// How the library is presented (browse order).
+    @Published private(set) var view: LibraryView
 
     private let prefs = Preferences()
     private static let audioExtensions: Set<String> = ["mp3", "m4a", "wav", "aiff", "aif", "flac"]
@@ -24,7 +24,7 @@ final class MusicLibrary: ObservableObject {
 
     init() {
         folder = Self.resolveFolder(prefs: Preferences())
-        sort = prefs.librarySort
+        view = prefs.libraryView
         Self.migrateLegacyFiles(into: folder)
         startWatching()
         Task { await scan() }
@@ -71,52 +71,12 @@ final class MusicLibrary: ObservableObject {
         return track
     }
 
-    /// Switch the ordering. `.manual` restores the saved hand-arranged order; the
-    /// others sort the current tracks by a field. Persisted so it survives relaunch.
-    func setSort(_ newSort: LibrarySort) {
-        guard newSort != sort else { return }
-        sort = newSort
-        prefs.librarySort = newSort
+    /// Switch the browse order. Persisted so it survives relaunch.
+    func setView(_ newView: LibraryView) {
+        guard newView != view else { return }
+        view = newView
+        prefs.libraryView = newView
         tracks = arranged(tracks)
-    }
-
-    // MARK: Manual order
-
-    /// Reorder by index (SwiftUI `.onMove` semantics).
-    func move(fromOffsets: IndexSet, toOffset: Int) {
-        var updated = tracks
-        updated.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        applyManual(updated)
-    }
-
-    private func applyManual(_ list: [Track]) {
-        tracks = list
-        prefs.libraryOrder = list.map(\.url.path)
-        setManualSort()
-    }
-
-    /// Any hand reorder implies the manual order is now what the user wants back.
-    private func setManualSort() {
-        guard sort != .manual else { return }
-        sort = .manual
-        prefs.librarySort = .manual
-    }
-
-    /// Live reorder while a drag is in progress — moves the track with `path` to
-    /// `index`. Cheap: mutates the in-memory order only; call `commitOrder()` on
-    /// drop to persist (so we don't hammer UserDefaults every frame).
-    func reorder(path: String, toIndex index: Int) {
-        guard let from = tracks.firstIndex(where: { $0.url.path == path }) else { return }
-        var updated = tracks
-        let item = updated.remove(at: from)
-        updated.insert(item, at: min(max(index, 0), updated.count))
-        if updated.map(\.url.path) != tracks.map(\.url.path) { tracks = updated }
-    }
-
-    /// Persist the current order once a drag finishes.
-    func commitOrder() {
-        prefs.libraryOrder = tracks.map(\.url.path)
-        setManualSort()
     }
 
     /// Move a track's file to the Trash and drop it from the library.
@@ -194,36 +154,17 @@ final class MusicLibrary: ObservableObject {
         }
     }
 
-    /// Order a freshly-scanned list by the active `sort`.
+    /// Order a freshly-scanned list by the active browse `view`.
     private func arranged(_ list: [Track]) -> [Track] {
-        switch sort {
-        case .manual:    return manuallyOrdered(list)
-        case .title:     return list.sorted { titleKey($0) < titleKey($1) }
-        case .artist:    return list.sorted(by: artistTrackOrder)
-        case .dateAdded: return list.sorted { ($0.dateAdded ?? .distantPast) > ($1.dateAdded ?? .distantPast) }
+        switch view {
+        case .recent:
+            return list.sorted { ($0.dateAdded ?? .distantPast) > ($1.dateAdded ?? .distantPast) }
+        case .alphabetical:
+            return list.sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
+        case .artist:
+            return list.sorted(by: artistTrackOrder)
         }
     }
-
-    /// Reconcile a list with the saved manual order: known files keep their saved
-    /// position, new files sort in alphabetically at the end, and the merged order
-    /// is persisted.
-    private func manuallyOrdered(_ list: [Track]) -> [Track] {
-        let position = Dictionary(prefs.libraryOrder.enumerated().map { ($1, $0) },
-                                  uniquingKeysWith: { first, _ in first })
-        let sorted = list.sorted { a, b in
-            switch (position[a.url.path], position[b.url.path]) {
-            case let (x?, y?): return x < y
-            case (_?, nil): return true                    // known before new files
-            case (nil, _?): return false
-            case (nil, nil):
-                return a.displayTitle.localizedCaseInsensitiveCompare(b.displayTitle) == .orderedAscending
-            }
-        }
-        prefs.libraryOrder = sorted.map(\.url.path)
-        return sorted
-    }
-
-    private func titleKey(_ t: Track) -> String { t.displayTitle.lowercased() }
 
     /// Order tracks by artist → track number → title, so one artist's tracks read
     /// in a sensible order. Untagged fields sort last within their level.

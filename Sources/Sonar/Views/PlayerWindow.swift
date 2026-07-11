@@ -17,9 +17,6 @@ struct PlayerWindow: View {
     @State private var rowFrames: [String: CGRect] = [:]
     @State private var draggingID: String?
     @State private var dragCursorY: CGFloat = 0
-    // Group the library list by artist into collapsible sections.
-    @State private var groupByArtist = false
-    @State private var collapsedGroups: Set<String> = []
     // Source switcher: nil = the whole library, otherwise the viewed playlist.
     @State private var selectedPlaylistID: Playlist.ID?
     @State private var renamingPlaylist = false
@@ -599,7 +596,7 @@ struct PlayerWindow: View {
                     .foregroundStyle(.white.opacity(0.3))
                 Spacer()
                 if !controller.library.tracks.isEmpty {
-                    sortGroupMenu
+                    viewMenu
                 }
                 Button { controller.library.revealInFinder() } label: {
                     Image(systemName: "folder").font(.system(size: 12, weight: .medium))
@@ -887,23 +884,10 @@ struct PlayerWindow: View {
                     if filteredTracks.isEmpty {
                         emptyMessage("No tracks match “\(searchText)”")
                     }
-                    if groupByArtist && searchText.isEmpty {
-                        // Collapsible per-artist sections, each playable as its own scope.
-                        ForEach(librarySections) { section in
-                            groupHeader(section)
-                            if !collapsedGroups.contains(section.id) {
-                                ForEach(section.tracks) { track in
-                                    libraryRow(track, reorderID: nil, scope: section.tracks,
-                                               showArtist: false)
-                                }
-                            }
-                        }
-                    } else {
-                        // Drag-to-reorder only makes sense in the flat, manually-ordered list.
-                        let canReorder = searchText.isEmpty && controller.library.sort == .manual
-                        ForEach(filteredTracks) { track in
-                            libraryRow(track, reorderID: canReorder ? track.url.path : nil)
-                        }
+                    // Flat list in the chosen browse order; the artist is shown under
+                    // each title, so there's no need for per-artist section headers.
+                    ForEach(filteredTracks) { track in
+                        libraryRow(track)
                     }
                 }
             }
@@ -916,35 +900,22 @@ struct PlayerWindow: View {
         .scrollIndicators(.hidden)
     }
 
-    /// One library row. `reorderID` non-nil enables drag; `scope` is the list that
-    /// playing this row plays through (a section's tracks, or the whole library).
-    private func libraryRow(_ track: Track, reorderID: String?, scope: [Track]? = nil,
-                            showArtist: Bool = true) -> some View {
-        let path = track.url.path
-        return TrackRowView(
+    /// One library row. The library is always shown in a sorted browse order, so
+    /// there's no drag-to-reorder here — custom order lives in playlists/the queue.
+    private func libraryRow(_ track: Track) -> some View {
+        TrackRowView(
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
             durationText: timeString(track.duration),
-            onTap: { controller.play(track, in: scope) },
+            onTap: { controller.play(track) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },
-            showArtist: showArtist,
             queueHasItems: !controller.queue.isEmpty,
-            reorderID: reorderID,
-            isDragging: draggingID == path,
-            onReorderChanged: { y in handleLibraryReorder(path: path, cursorY: y) },
-            onReorderEnded: {
-                controller.library.commitOrder()
-                withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
-            },
             addToPlaylists: playlistMenuItems(for: track),
             onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) }
         )
-        .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
-                                      cursorY: dragCursorY, frames: rowFrames,
-                                      enabled: reorderID != nil))
     }
 
     /// One row inside a playlist. Plays through the playlist as its scope,
@@ -981,96 +952,32 @@ struct PlayerWindow: View {
 
     // MARK: Sort & group
 
-    /// Header menu: choose the library sort order and how it's auto-sectioned.
-    private var sortGroupMenu: some View {
-        let active = groupByArtist || controller.library.sort != .manual
-        return Menu {
-            Section("Sort by") {
-                Picker("Sort", selection: sortBinding) {
-                    ForEach(LibrarySort.allCases, id: \.self) { Text($0.label).tag($0) }
+    /// Header menu: pick the library browse order (Recent / A–Z / Artist). The
+    /// button shows the active view's icon; each option carries its own icon.
+    private var viewMenu: some View {
+        Menu {
+            Picker("View", selection: viewBinding) {
+                ForEach(LibraryView.allCases, id: \.self) { view in
+                    Label(view.label, systemImage: view.symbol).tag(view)
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
             }
-            Section("Group") {
-                Toggle("Group by artist", isOn: groupByArtistBinding)
-            }
+            .pickerStyle(.inline)
+            .labelsHidden()
         } label: {
-            Image(systemName: "line.3.horizontal.decrease")
+            Image(systemName: controller.library.view.symbol)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(active ? accent : .white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.6))
                 .frame(width: 22, height: 22).contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .tooltip("Sort & group")
+        .tooltip("View")
     }
 
-    private var sortBinding: Binding<LibrarySort> {
-        Binding(get: { controller.library.sort },
-                set: { controller.library.setSort($0) })
-    }
-
-    private var groupByArtistBinding: Binding<Bool> {
-        Binding(get: { groupByArtist },
-                set: { new in withAnimation(.easeInOut(duration: 0.2)) { groupByArtist = new } })
-    }
-
-    // MARK: Auto-groups (by artist)
-
-    /// The library split into collapsible per-artist sections (alphabetical).
-    /// Empty when artist grouping is off — the flat list is shown instead.
-    private var librarySections: [LibrarySection] {
-        guard groupByArtist else { return [] }
-        return Dictionary(grouping: filteredTracks) { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
-            .map { LibrarySection(id: $0.key, tracks: $0.value) }
-            .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
-    }
-
-    private func groupHeader(_ section: LibrarySection) -> some View {
-        let collapsed = collapsedGroups.contains(section.id)
-        return HStack(spacing: 8) {
-            Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(width: 14)
-            Text(section.id)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
-                .lineLimit(1)
-            Text("\(section.tracks.count)")
-                .font(.system(size: 10, design: .rounded))
-                .foregroundStyle(.white.opacity(0.35))
-            Spacer()
-            Button { controller.playGroup(section.tracks) } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(accent)
-                    .frame(width: 22, height: 22).contentShape(Rectangle())
-            }
-            .buttonStyle(PressableButtonStyle())
-            .tooltip("Play")
-        }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                if collapsed { collapsedGroups.remove(section.id) } else { collapsedGroups.insert(section.id) }
-            }
-        }
-    }
-
-    /// Reorder the library live from the cursor's y position — pure math, so the
-    /// insertion never lags behind the finger.
-    private func handleLibraryReorder(path: String, cursorY: CGFloat) {
-        if draggingID != path { draggingID = path }
-        dragCursorY = cursorY
-        let others = filteredTracks.filter { $0.url.path != path }
-        let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
-        if controller.library.tracks.firstIndex(where: { $0.url.path == path }) != target {
-            withAnimation(.easeInOut(duration: 0.18)) { controller.library.reorder(path: path, toIndex: target) }
-        }
+    private var viewBinding: Binding<LibraryView> {
+        Binding(get: { controller.library.view },
+                set: { new in withAnimation(.easeInOut(duration: 0.2)) { controller.library.setView(new) } })
     }
 
     /// Reorder within a playlist live from the cursor's y position.
