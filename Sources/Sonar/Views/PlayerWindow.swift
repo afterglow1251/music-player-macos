@@ -447,10 +447,15 @@ struct PlayerWindow: View {
                 heroArtView(width: width, height: height)
             }
             HStack(spacing: 8) {
-                if let remaining = controller.sleepRemaining {
-                    sleepBadge(timeString(remaining))
-                } else if controller.sleepMode == .endOfTrack {
-                    sleepBadge("track end")
+                // The sleep badge floats over the artwork only — over the Settings
+                // panel it would collide with the "Settings" title (and the panel
+                // shows its own countdown), and over Lyrics it covers the words.
+                if !showSettings && !showLyrics {
+                    if let remaining = controller.sleepRemaining {
+                        sleepBadge(timeString(remaining))
+                    } else if controller.sleepMode == .endOfTrack {
+                        sleepBadge("track end")
+                    }
                 }
                 Spacer()
                 lyricsToggle
