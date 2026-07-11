@@ -335,6 +335,9 @@ struct QueueRowView: View {
                 radius: isDragging ? 8 : 0, y: isDragging ? 4 : 0)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Remove from Queue", role: .destructive, action: onRemove)
+        }
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
