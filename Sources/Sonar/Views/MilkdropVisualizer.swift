@@ -26,8 +26,10 @@ struct MilkdropView: NSViewRepresentable {
         view.preferredFramesPerSecond = 60
         view.enableSetNeedsDisplay = false
         view.isPaused = false
-        view.clearColor = MTLClearColorMake(0, 0, 0, 1)
-        view.layer?.isOpaque = true
+        // Transparent: dark areas let whatever's behind the strip show through, so
+        // the visualizer blends into the app instead of reading as a black box.
+        view.clearColor = MTLClearColorMake(0, 0, 0, 0)
+        view.layer?.isOpaque = false
         if let device = view.device {
             context.coordinator.setup(device: device)
         }
@@ -217,7 +219,7 @@ final class MilkdropRenderer: NSObject, MTKViewDelegate {
 
         // Pass 2 — show `back` on screen.
         screenPass.colorAttachments[0].loadAction = .clear
-        screenPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
+        screenPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         if let e2 = cb.makeRenderCommandEncoder(descriptor: screenPass) {
             e2.setRenderPipelineState(compositePipeline)
             e2.setFragmentTexture(back, index: 0)
@@ -405,7 +407,12 @@ extension MilkdropRenderer {
                                        texture2d<float> tex [[texture(0)]],
                                        sampler samp [[sampler(0)]]) {
         float4 c = tex.sample(samp, in.uv);
-        return float4(c.rgb * 1.25, 1.0);
+        // Alpha follows brightness so dark areas are transparent (the strip's
+        // background shows through) and only the glowing trails are opaque.
+        // Premultiplied: rgb (≈1.25·luma) stays below alpha (≈1.6·luma).
+        float luma = max(max(c.r, c.g), c.b);
+        float alpha = clamp(luma * 1.6, 0.0, 1.0);
+        return float4(c.rgb * 1.25, alpha);
     }
     """
 }

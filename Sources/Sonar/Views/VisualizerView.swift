@@ -37,13 +37,15 @@ struct VisualizerView: View {
     var body: some View {
         ZStack {
             if mode == .milkdrop {
-                // A GPU frame-feedback engine — its own Metal-backed view.
+                // A GPU frame-feedback engine — its own Metal-backed view. It renders
+                // transparent (dark areas show the strip's background), so no black
+                // box behind it.
                 MilkdropView(theme: theme, analyzer: engine.analyzer, isPlaying: engine.isPlaying)
             } else {
                 classicCanvas
+                    .background(transparentBackground ? Color.clear : Palette.background)
             }
         }
-        .background(transparentBackground ? Color.clear : Palette.background)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             // Double-click steps through the modes, just like the real thing.
