@@ -6,6 +6,10 @@
 # macOS
 .DS_Store
 
-# Tooling state
-.claude/
+# Tooling state — ignore all of .claude except the shared, team-facing config.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/agents/
+.claude/settings.local.json
 .omc/
