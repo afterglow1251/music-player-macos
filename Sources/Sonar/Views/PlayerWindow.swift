@@ -28,6 +28,7 @@ struct PlayerWindow: View {
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var searchActive = false
+    @State private var searchResults: [Track] = []   // filled off-main by the debounced search task
     @State private var urlChips: [String] = []   // links queued via the ＋ button
     @State private var shakingChipURL: String?   // chip to shake when a dupe is re-added
     @State private var isDropTargeted = false
@@ -61,6 +62,19 @@ struct PlayerWindow: View {
         // fullscreen too, where normalContent isn't in the tree.
         .onAppear { decodeArtwork(controller.currentTrack) }
         .onChange(of: controller.currentTrack) { _, track in decodeArtwork(track) }
+        // Search runs here, not in `body`: debounce the keystrokes, then rank on a
+        // background task so a big library never blocks the UI. Re-keys on every
+        // searchText change (the previous task is cancelled automatically).
+        .task(id: searchText) {
+            let query = searchText.trimmingCharacters(in: .whitespaces)
+            guard !query.isEmpty else { return }        // empty → filteredTracks uses the library directly
+            try? await Task.sleep(for: .milliseconds(150))
+            if Task.isCancelled { return }
+            let tracks = controller.library.tracks
+            let ranked = await Task.detached { PlayerWindow.rank(query: query, tracks: tracks) }.value
+            if Task.isCancelled { return }
+            searchResults = ranked
+        }
         // Also re-decode when only the artwork changes (same track, metadata just
         // finished loading after a download) — same-url tracks compare equal, so
         // the change above wouldn't fire.
@@ -1346,11 +1360,20 @@ struct PlayerWindow: View {
         controller.currentTrack?.displayTitle ?? "No track playing"
     }
 
+    /// The list the library section renders. Empty query → the whole library
+    /// (cheap, always fresh). Otherwise the precomputed `searchResults`, filled
+    /// by the debounced, off-main task — never fuzzy-ranked inside `body`.
     private var filteredTracks: [Track] {
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return controller.library.tracks }
-        // Fuzzy: typo-tolerant, ranked best-match first.
-        return controller.library.tracks
+        searchText.trimmingCharacters(in: .whitespaces).isEmpty
+            ? controller.library.tracks
+            : searchResults
+    }
+
+    /// Fuzzy-rank a (non-empty) query against the library. Static & pure so it can
+    /// run on a background task without touching view state. `nonisolated` +
+    /// `Sendable` inputs let it hop off the main actor.
+    nonisolated static func rank(query: String, tracks: [Track]) -> [Track] {
+        tracks
             .compactMap { track -> (track: Track, score: Double)? in
                 guard let s = FuzzySearch.score(query, in: [track.displayTitle, track.artist]) else { return nil }
                 return (track, s)
