@@ -359,14 +359,13 @@ final class PlayerController: ObservableObject {
         // Skip if we already have this exact video (matched by its id).
         downloader.beginChecking()
         if let videoID = await downloader.fetchVideoID(url),
-           let existing = library.tracks.first(where: { $0.videoID == videoID }) {
+           library.tracks.contains(where: { $0.videoID == videoID }) {
             downloader.finishChecking(message: "Already in library")
-            play(existing)
             return
         }
         guard let fileURL = await downloader.download(url, into: library.folder) else { return }
-        let track = await library.add(fileURL)
-        play(track)
+        // Just add it to the library — don't hijack whatever is currently playing.
+        await library.add(fileURL)
     }
 
     /// Drop one queued (not-yet-started) item. No-op for the active download —
