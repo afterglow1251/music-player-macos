@@ -893,7 +893,8 @@ struct PlayerWindow: View {
                             groupHeader(section)
                             if !collapsedGroups.contains(section.id) {
                                 ForEach(section.tracks) { track in
-                                    libraryRow(track, reorderID: nil, scope: section.tracks)
+                                    libraryRow(track, reorderID: nil, scope: section.tracks,
+                                               showArtist: grouping != .artist)
                                 }
                             }
                         }
@@ -917,7 +918,8 @@ struct PlayerWindow: View {
 
     /// One library row. `reorderID` non-nil enables drag; `scope` is the list that
     /// playing this row plays through (a section's tracks, or the whole library).
-    private func libraryRow(_ track: Track, reorderID: String?, scope: [Track]? = nil) -> some View {
+    private func libraryRow(_ track: Track, reorderID: String?, scope: [Track]? = nil,
+                            showArtist: Bool = true) -> some View {
         let path = track.url.path
         return TrackRowView(
             track: track,
@@ -928,6 +930,7 @@ struct PlayerWindow: View {
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },
+            showArtist: showArtist,
             queueHasItems: !controller.queue.isEmpty,
             reorderID: reorderID,
             isDragging: draggingID == path,

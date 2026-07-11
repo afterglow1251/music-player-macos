@@ -178,6 +178,9 @@ struct TrackRowView: View {
     let onPlayNext: () -> Void
     let onAddToQueue: () -> Void
     let onDelete: () -> Void
+    /// Whether to show the artist subtitle. Hidden when the list is already grouped
+    /// by artist (the section header names the artist, so repeating it is noise).
+    var showArtist: Bool = true
     /// Whether the queue already has items. When empty, "Play Next" and "Add to
     /// Queue" would do the same thing, so only "Play Next" is shown.
     var queueHasItems: Bool = false
@@ -212,7 +215,7 @@ struct TrackRowView: View {
                     .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
                     .foregroundStyle(isCurrent ? .white : .white.opacity(0.85))
                     .lineLimit(1)
-                if !track.artist.isEmpty {
+                if showArtist && !track.artist.isEmpty {
                     Text(track.artist)
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.45))
