@@ -107,6 +107,7 @@ private struct MiniPlayerView: View {
 
     private var engine: AudioEngine { controller.engine }
     private let accent = Theme.accent
+    @State private var barHover = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -165,14 +166,25 @@ private struct MiniPlayerView: View {
         return VStack(spacing: 3) {
             GeometryReader { geo in
                 let width = geo.size.width
+                let barHeight: CGFloat = barHover ? 5 : 4
+                let knobX = min(max(width * fraction, 5), max(width - 5, 5))
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.15)).frame(height: 4)
-                    Capsule().fill(accent).frame(width: width * fraction, height: 4)
+                    Capsule().fill(Color.primary.opacity(barHover ? 0.22 : 0.15)).frame(height: barHeight)
+                    Capsule().fill(accent).frame(width: width * fraction, height: barHeight)
+                    // A knob that only appears on hover (Spotify/Apple-Music style),
+                    // sitting at the playhead — the native Slider can't hide its thumb.
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 10, height: 10)
+                        .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
+                        .offset(x: knobX - 5)
+                        .opacity(barHover ? 1 : 0)
                 }
                 // Taller invisible hit area so the thin bar is easy to grab; drag or
                 // click anywhere along it to seek.
                 .frame(height: 12)
                 .contentShape(Rectangle())
+                .onHover { barHover = $0 }
                 .gesture(
                     DragGesture(minimumDistance: 0).onChanged { value in
                         guard engine.duration > 0 else { return }
@@ -180,6 +192,7 @@ private struct MiniPlayerView: View {
                         engine.seek(to: Double(f) * engine.duration)
                     }
                 )
+                .animation(.easeOut(duration: 0.12), value: barHover)
             }
             .frame(height: 12)
             HStack {
