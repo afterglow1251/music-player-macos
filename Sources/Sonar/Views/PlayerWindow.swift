@@ -1207,7 +1207,10 @@ struct PlayerWindow: View {
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(Capsule().fill(accent.opacity(0.14) as Color))
         .overlay(Capsule().stroke(accent.opacity(0.25) as Color))
-        .transition(.scale.combined(with: .opacity))
+        // Fade in (no centre-anchored scale, which made the capsule pop and the
+        // label appear to slide into place); keep the tidy scale-out on removal.
+        .transition(.asymmetric(insertion: .opacity,
+                                removal: .scale.combined(with: .opacity)))
     }
 
     private var canDownload: Bool {
