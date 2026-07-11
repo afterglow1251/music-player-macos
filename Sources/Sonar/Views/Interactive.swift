@@ -331,20 +331,19 @@ struct QueueRowView: View {
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.35))
                 .frame(width: 16)
-            // Winamp-style single line: muted "Artist — " prefix, then the
-            // title. Built by concatenation so the "…" truncates the whole line
-            // as one, rather than clipping artist and title independently.
-            Group {
-                if track.artist.isEmpty {
-                    Text(track.displayTitle).foregroundColor(.white.opacity(0.85))
-                } else {
-                    Text(track.artist).foregroundColor(.white.opacity(0.45))
-                        + Text("  —  ").foregroundColor(.white.opacity(0.3))
-                        + Text(track.displayTitle).foregroundColor(.white.opacity(0.85))
+            // Two lines — title over a muted artist — matching library/playlist rows.
+            VStack(alignment: .leading, spacing: 1) {
+                Text(track.displayTitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                if !track.artist.isEmpty {
+                    Text(track.artist)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .lineLimit(1)
                 }
             }
-            .font(.system(size: 12))
-            .lineLimit(1)
             Spacer(minLength: 4)
             HStack(spacing: 8) {
                 if reorderID != nil {
