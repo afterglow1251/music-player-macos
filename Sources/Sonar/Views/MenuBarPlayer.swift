@@ -107,7 +107,8 @@ private struct MiniPlayerView: View {
 
     private var engine: AudioEngine { controller.engine }
     private let accent = Theme.accent
-    @State private var barHover = false
+    @State private var isScrubbing = false
+    @State private var scrubTime: TimeInterval = 0
 
     var body: some View {
         VStack(spacing: 10) {
@@ -117,17 +118,15 @@ private struct MiniPlayerView: View {
         }
         .padding(12)
         .frame(width: 268)
-        .background(Color(nsColor: .windowBackgroundColor))
         // Open the main app — pinned to the top-right corner, across from the title.
         .overlay(alignment: .topTrailing) {
-            Button(action: onShowMain) {
+            PressButton(action: onShowMain) {
                 Image(systemName: "macwindow")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .padding(6)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(DimPressStyle())
             .help("Show Sonar")
             .padding(6)
         }
@@ -169,44 +168,23 @@ private struct MiniPlayerView: View {
     }
 
     private var progress: some View {
-        let duration = max(engine.duration, 0.001)
-        let fraction = min(max(engine.currentTime / duration, 0), 1)
-        return VStack(spacing: 3) {
-            GeometryReader { geo in
-                let width = geo.size.width
-                let barHeight: CGFloat = barHover ? 5 : 4
-                let knobX = min(max(width * fraction, 7.5), max(width - 7.5, 7.5))
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(barHover ? 0.22 : 0.15)).frame(height: barHeight)
-                    Capsule().fill(accent).frame(width: width * fraction, height: barHeight)
-                    // A knob that only appears on hover (Spotify/Apple-Music style),
-                    // sitting at the playhead. Shaped like the native macOS slider
-                    // thumb — a light, gradient-filled horizontal pill — since the
-                    // real Slider can't hide its thumb.
-                    Capsule()
-                        .fill(LinearGradient(colors: [Color(white: 0.98), Color(white: 0.86)],
-                                             startPoint: .top, endPoint: .bottom))
-                        .frame(width: 15, height: 11)
-                        .overlay(Capsule().strokeBorder(.black.opacity(0.18), lineWidth: 0.5))
-                        .shadow(color: .black.opacity(0.35), radius: 1.5, y: 0.5)
-                        .offset(x: knobX - 7.5)
-                        .opacity(barHover ? 1 : 0)
+        VStack(spacing: 3) {
+            // The same native slider the main window uses, so the two bars match
+            // and pick up the system look (including vibrancy inside the popover).
+            Slider(
+                value: Binding(
+                    get: { isScrubbing ? scrubTime : engine.currentTime },
+                    set: { scrubTime = $0 }
+                ),
+                in: 0...max(engine.duration, 0.01),
+                onEditingChanged: { editing in
+                    isScrubbing = editing
+                    if !editing { engine.seek(to: scrubTime) }
                 }
-                // Taller invisible hit area so the thin bar is easy to grab; drag or
-                // click anywhere along it to seek.
-                .frame(height: 12)
-                .contentShape(Rectangle())
-                .onHover { barHover = $0 }
-                .gesture(
-                    DragGesture(minimumDistance: 0).onChanged { value in
-                        guard engine.duration > 0 else { return }
-                        let f = min(max(value.location.x / width, 0), 1)
-                        engine.seek(to: Double(f) * engine.duration)
-                    }
-                )
-                .animation(.easeOut(duration: 0.12), value: barHover)
-            }
-            .frame(height: 12)
+            )
+            .controlSize(.small)
+            .tint(accent)
+            .disabled(engine.duration <= 0)
             HStack {
                 Text(Self.time(engine.currentTime)).font(.system(size: 9, design: .monospaced))
                 Spacer()
@@ -225,14 +203,13 @@ private struct MiniPlayerView: View {
     }
 
     private func control(_ symbol: String, size: CGFloat = 15, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        PressButton(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .medium))
                 .foregroundStyle(.primary)
                 .frame(width: 30, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(DimPressStyle())
     }
 
     private static func time(_ seconds: TimeInterval) -> String {
@@ -242,13 +219,29 @@ private struct MiniPlayerView: View {
     }
 }
 
-/// Native-feeling press feedback: the control dims (and dips a touch) while held,
-/// the way AppKit buttons do — `.buttonStyle(.plain)` gives no press state at all.
-private struct DimPressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.45 : 1)
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
-            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+/// A button that dims (and dips) while held — the way native controls respond.
+///
+/// Press state is driven by a `DragGesture`, not `ButtonStyle.isPressed`, because
+/// inside an `NSPopover` the button-style press state doesn't update reliably,
+/// whereas a drag gesture does (the seek bar uses one and works). The `Button`
+/// still owns the action so it only fires on a real click released inside.
+private struct PressButton<Label: View>: View {
+    let action: () -> Void
+    @ViewBuilder var label: Label
+    @State private var pressed = false
+
+    var body: some View {
+        Button(action: action) {
+            label
+                .opacity(pressed ? 0.4 : 1)
+                .scaleEffect(pressed ? 0.9 : 1)
+                .animation(.easeOut(duration: 0.08), value: pressed)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in pressed = true }
+                .onEnded { _ in pressed = false }
+        )
     }
 }
