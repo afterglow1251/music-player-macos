@@ -1,8 +1,8 @@
 import AppKit
 
-/// Draws the app's Dock icon at runtime — a black squircle holding a bold
-/// accent-green play triangle. The black tone is sampled to match the
-/// reference icon.
+/// Draws the app's Dock icon at runtime — a black squircle holding a waveform
+/// of rounded equalizer bars, each washed with a green→magenta vertical
+/// gradient. The black tone is sampled to match the reference icon.
 ///
 /// A bare SwiftPM binary has no bundle/AppIcon asset, so we set this image on
 /// `NSApp.applicationIconImage` at launch instead.
@@ -13,13 +13,9 @@ enum AppIcon {
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
             let rgb = CGColorSpaceCreateDeviceRGB()
 
-            // The app's accent green (Theme.accent).
-            let accent = NSColor(red: 0.29, green: 0.87, blue: 0.42, alpha: 1)
-
             // macOS icons leave ~8.5% transparent padding around the shape.
             let rect = fullRect.insetBy(dx: fullRect.width * 0.085, dy: fullRect.height * 0.085)
             let shape = squircle(in: rect)
-            let c = CGPoint(x: rect.midX, y: rect.midY)
 
             // Black background — dark gradient sampled from the reference icon
             // (~rgb(40,40,43) top → rgb(16,16,18) bottom).
@@ -43,37 +39,59 @@ enum AppIcon {
                                    endCenter: hlC, endRadius: rect.width * 0.40, options: [])
             ctx.restoreGState()
 
-            // Bold play triangle, optically centered (nudged left of the frame
-            // center so its visual mass sits centered).
-            let tw = rect.width * 0.34
-            let th = tw * 1.18
-            let px = c.x - tw * 0.42
-            let tri = CGMutablePath()
-            tri.move(to: CGPoint(x: px, y: c.y - th / 2))
-            tri.addLine(to: CGPoint(x: px, y: c.y + th / 2))
-            tri.addLine(to: CGPoint(x: px + tw, y: c.y))
-            tri.closeSubpath()
+            // Equalizer waveform. Each bar is a rounded (stadium) column with an
+            // independent top/bottom expressed as a fraction of the icon height
+            // (0 = bottom edge, 1 = top edge; 0.5 = middle). The tallest column
+            // sits just left of centre, with the deepest magenta reach below it.
+            let bars: [(top: CGFloat, bottom: CGFloat)] = [
+                (0.62, 0.38),
+                (0.74, 0.27),
+                (0.83, 0.15),
+                (0.72, 0.28),
+                (0.60, 0.40),
+            ]
 
-            // Glow + solid base.
-            ctx.saveGState()
-            ctx.setShadow(offset: .zero, blur: rect.width * 0.055, color: accent.withAlphaComponent(0.7).cgColor)
-            ctx.setLineJoin(.round)
-            ctx.setLineWidth(rect.width * 0.05)
-            ctx.addPath(tri); ctx.setStrokeColor(accent.cgColor); ctx.strokePath()
-            ctx.addPath(tri); ctx.setFillColor(accent.cgColor); ctx.fillPath()
-            ctx.restoreGState()
+            let barW = rect.width * 0.05
+            let pitch = barW * 2                       // bar + equal gap
+            let groupW = pitch * CGFloat(bars.count) - (pitch - barW)
+            var x = rect.midX - groupW / 2
 
-            // Fresh vertical gradient over the triangle (brighter at the top).
-            ctx.saveGState()
-            ctx.addPath(tri); ctx.clip()
-            let triGrad = CGGradient(colorsSpace: rgb,
-                                     colors: [NSColor(red: 0.55, green: 1.0, blue: 0.6, alpha: 1).cgColor,
-                                              accent.cgColor] as CFArray,
-                                     locations: [0, 1])!
-            ctx.drawLinearGradient(triGrad,
-                                   start: CGPoint(x: 0, y: c.y + th / 2),
-                                   end: CGPoint(x: 0, y: c.y - th / 2), options: [])
-            ctx.restoreGState()
+            // Gradient reused for every bar, mapped to that bar's own extent:
+            // bright green at the cap, dusky grey through the middle, vivid
+            // magenta at the foot.
+            let grad = CGGradient(colorsSpace: rgb,
+                                  colors: [NSColor(red: 0.40, green: 0.86, blue: 0.44, alpha: 1).cgColor,
+                                           NSColor(red: 0.60, green: 0.62, blue: 0.64, alpha: 1).cgColor,
+                                           NSColor(red: 0.83, green: 0.16, blue: 0.74, alpha: 1).cgColor] as CFArray,
+                                  locations: [0, 0.5, 1])!
+
+            for bar in bars {
+                let top = rect.minY + rect.height * bar.top
+                let bottom = rect.minY + rect.height * bar.bottom
+                let barRect = CGRect(x: x, y: bottom, width: barW, height: top - bottom)
+                let path = CGPath(roundedRect: barRect,
+                                  cornerWidth: barW / 2, cornerHeight: barW / 2,
+                                  transform: nil)
+
+                // Soft glow beneath the column.
+                ctx.saveGState()
+                ctx.setShadow(offset: .zero, blur: rect.width * 0.02,
+                              color: NSColor(red: 0.55, green: 0.35, blue: 0.7, alpha: 0.55).cgColor)
+                ctx.addPath(path)
+                ctx.setFillColor(NSColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1).cgColor)
+                ctx.fillPath()
+                ctx.restoreGState()
+
+                // Green→magenta wash clipped to the column.
+                ctx.saveGState()
+                ctx.addPath(path); ctx.clip()
+                ctx.drawLinearGradient(grad,
+                                       start: CGPoint(x: 0, y: top),
+                                       end: CGPoint(x: 0, y: bottom), options: [])
+                ctx.restoreGState()
+
+                x += pitch
+            }
 
             return true
         }
