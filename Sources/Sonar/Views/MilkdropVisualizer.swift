@@ -190,7 +190,7 @@ final class MilkdropRenderer: NSObject, MTKViewDelegate {
         else { return }
 
         let uniforms = advance(size: view.drawableSize)
-        updateWaveGeometry(into: waveBuffer, aspect: uniforms.aspect, level: uniforms.level)
+        updateWaveGeometry(into: waveBuffer, level: uniforms.level)
 
         guard let cb = queue.makeCommandBuffer() else { return }
 
@@ -273,24 +273,24 @@ final class MilkdropRenderer: NSObject, MTKViewDelegate {
             level: bass)
     }
 
-    /// Wrap the live waveform into a reactive ring, colored across the palette.
-    private func updateWaveGeometry(into buffer: MTLBuffer, aspect: Float, level: Float) {
+    /// Draw the live waveform straight across the full width, colored across the
+    /// palette. A horizontal sweep fills the frame at any aspect (the strip is very
+    /// wide and short); the feedback warp then rotates/zooms it into flowing shapes.
+    private func updateWaveGeometry(into buffer: MTLBuffer, level: Float) {
         let wave = analyzer.waveform()
         let count = min(wave.count, Self.maxWavePoints)
         guard count > 1 else { wavePointCount = 0; return }
 
-        let intensity: Float = 0.05 * (0.4 + level)
+        let intensity: Float = 0.13 * (0.5 + level)
         let pointer = buffer.contents().bindMemory(to: Float.self, capacity: count * 6)
         for i in 0..<count {
             let t = Float(i) / Float(count - 1)
             let sample = wave[i]
-            let angle = t * 2 * .pi
-            let radius = 0.34 + sample * 0.30
-            let x = cos(angle) * radius / max(aspect, 0.0001)
-            let y = sin(angle) * radius
+            let x = t * 2 - 1            // -1…1 across the full width
+            let y = sample * 0.72        // vertical swing around the center
 
             let stop = palette[min(Int(t * Float(palette.count - 1)), palette.count - 1)]
-            let glow = intensity * (0.5 + abs(sample))
+            let glow = intensity * (0.6 + abs(sample))
             let base = i * 6
             pointer[base + 0] = x
             pointer[base + 1] = y
@@ -405,7 +405,7 @@ extension MilkdropRenderer {
                                        texture2d<float> tex [[texture(0)]],
                                        sampler samp [[sampler(0)]]) {
         float4 c = tex.sample(samp, in.uv);
-        return float4(c.rgb, 1.0);
+        return float4(c.rgb * 1.25, 1.0);
     }
     """
 }
