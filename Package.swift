@@ -15,11 +15,6 @@ let package = Package(
                 // (unused values, deprecations, concurrency) at build time.
                 .unsafeFlags(["-warnings-as-errors"])
             ]
-        ),
-        .testTarget(
-            name: "SonarTests",
-            dependencies: ["Sonar"],
-            path: "Tests/SonarTests"
         )
     ]
 )

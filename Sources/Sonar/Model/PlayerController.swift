@@ -135,8 +135,7 @@ final class PlayerController: ObservableObject {
     /// Tracks that next/previous walk through: the active scope if it still holds
     /// the current track, otherwise the whole library.
     private var activeScope: [Track] {
-        if let track = currentTrack, scope.contains(track) { return scope }
-        return library.tracks
+        PlaybackSequencer.activeScope(current: currentTrack, scope: scope, library: library.tracks)
     }
 
     func play(_ track: Track, in scope: [Track]? = nil) {
@@ -163,59 +162,47 @@ final class PlayerController: ObservableObject {
     }
 
     func next(auto: Bool = false) {
-        // Sleep "until end of track": stop here instead of advancing.
-        if auto, sleepMode == .endOfTrack {
-            setSleep(.off)
+        let decision = PlaybackSequencer.nextDecision(
+            auto: auto, current: currentTrack, library: library.tracks, scope: scope,
+            queueFront: queue.first?.track, shuffle: shuffle, repeatMode: repeatMode,
+            sleepUntilEndOfTrack: sleepMode == .endOfTrack)
+        switch decision {
+        case .none:
             return
-        }
-        if auto, repeatMode == .one, let track = currentTrack { play(track, in: activeScope); return }
-
-        // The queue overrides the normal order: play what the user lined up next.
-        if !queue.isEmpty { play(queue.removeFirst().track); return }
-
-        let list = activeScope
-        guard !list.isEmpty else { return }
-        guard let index = list.firstIndex(where: { $0 == currentTrack }) else { play(list[0], in: list); return }
-
-        if shuffle {
-            play(randomTrack(in: list, excluding: index), in: list)
-            return
-        }
-        let nextIndex = index + 1
-        if nextIndex < list.count {
-            play(list[nextIndex], in: list)
-        } else if repeatMode == .all {
-            play(list[0], in: list)
-        } else if auto {
-            engine.stop()                       // reached the end
-        } else {
-            play(list[0], in: list)             // manual next wraps around
+        case .stopForSleep:
+            setSleep(.off)                          // track ended naturally; just clear the timer
+        case .stopAtEnd:
+            engine.stop()
+        case .play(let track, let scope, let fromQueue):
+            if fromQueue { queue.removeFirst(); play(track) }   // queue plays in the library scope
+            else { play(track, in: scope) }
+        case .playRandom(let list, let excluding, _):
+            play(randomTrack(in: list, excluding: excluding), in: list)
         }
     }
 
     func previous() {
         if engine.currentTime > 3 { engine.seek(to: 0); return }
-        let list = activeScope
-        guard !list.isEmpty, let index = list.firstIndex(where: { $0 == currentTrack }) else { return }
-        if shuffle { play(randomTrack(in: list, excluding: index), in: list); return }
-        play(list[index > 0 ? index - 1 : list.count - 1], in: list)
+        switch PlaybackSequencer.previousDecision(current: currentTrack, activeScope: activeScope, shuffle: shuffle) {
+        case .play(let track, let scope, _):
+            play(track, in: scope)
+        case .playRandom(let list, let excluding, _):
+            play(randomTrack(in: list, excluding: excluding), in: list)
+        case .none, .stopForSleep, .stopAtEnd:
+            return
+        }
     }
 
-    /// The URL that will play next, computed WITHOUT side effects — the engine
-    /// uses it to preload for a gapless join. Mirrors `next(auto:)`'s selection.
-    /// Returns nil when playback should stop or the transition can't be gapless
-    /// (shuffle draws randomly at advance time; end of scope).
+    /// The URL that will play next, WITHOUT side effects — the engine preloads it
+    /// for a gapless join. Shares `nextDecision` with `next(auto:)`, so the
+    /// preloaded track can't disagree with what actually plays. nil when playback
+    /// should stop or the transition can't be gapless (shuffle picks at advance).
     private func peekNextURL() -> URL? {
-        if sleepMode == .endOfTrack { return nil }
-        if repeatMode == .one { return currentTrack?.url }
-        if let queued = queue.first { return queued.track.url }
-        if shuffle { return nil }
-        let list = activeScope
-        guard !list.isEmpty else { return nil }
-        guard let index = list.firstIndex(where: { $0 == currentTrack }) else { return list.first?.url }
-        let nextIndex = index + 1
-        if nextIndex < list.count { return list[nextIndex].url }
-        if repeatMode == .all { return list.first?.url }
+        let decision = PlaybackSequencer.nextDecision(
+            auto: true, current: currentTrack, library: library.tracks, scope: scope,
+            queueFront: queue.first?.track, shuffle: shuffle, repeatMode: repeatMode,
+            sleepUntilEndOfTrack: sleepMode == .endOfTrack)
+        if case .play(let track, _, _) = decision { return track.url }
         return nil
     }
 
