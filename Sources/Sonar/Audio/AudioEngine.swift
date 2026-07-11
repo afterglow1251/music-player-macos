@@ -1,6 +1,19 @@
 import Foundation
 import AVFoundation
 
+/// The frequently-changing playback position, isolated on its own observable.
+///
+/// `currentTime` ticks ~10×/s. If it lived on `AudioEngine` (or was forwarded
+/// through `PlayerController`), every view observing those would re-render 10×/s
+/// — including the whole library list, which made scrolling stutter. Keeping it
+/// here means only the few views that actually show the position (seek bar, time
+/// label, lyrics) observe this object and re-render on each tick.
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published var currentTime: TimeInterval = 0
+    @Published var duration: TimeInterval = 0
+}
+
 /// Plays local audio files and feeds the spectrum analyzer.
 ///
 /// Built on AVAudioEngine → AVAudioPlayerNode. A tap on the main mixer streams
@@ -12,9 +25,21 @@ final class AudioEngine: ObservableObject {
     // MARK: Published UI state
 
     @Published private(set) var isPlaying = false
-    @Published private(set) var currentTime: TimeInterval = 0
-    @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var trackTitle: String = "SONAR"
+
+    /// Playback position, kept off `objectWillChange` so its ~10 Hz ticks don't
+    /// re-render every AudioEngine/PlayerController observer. Read it via `clock`.
+    let clock = PlaybackClock()
+    /// Proxies onto `clock` so existing engine code reads/writes these unchanged.
+    /// (Only the engine mutates these; external callers just read.)
+    var currentTime: TimeInterval {
+        get { clock.currentTime }
+        set { clock.currentTime = newValue }
+    }
+    var duration: TimeInterval {
+        get { clock.duration }
+        set { clock.duration = newValue }
+    }
     @Published var volume: Float = 0.75 {
         didSet { engine.mainMixerNode.outputVolume = volume }
     }

@@ -60,6 +60,12 @@ final class PlayerController: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let prefs = Preferences()
 
+    /// True only while `restorePreferences()` runs. Restoring one `@Published`
+    /// (e.g. `shuffle`) fires its `didSet { save() }`, which would persist a
+    /// half-restored snapshot — clobbering values not yet restored (the theme
+    /// was being reset to Classic this way). Guarding `save()` prevents it.
+    private var isRestoring = false
+
     init() {
         restorePreferences()
 
@@ -409,6 +415,7 @@ final class PlayerController: ObservableObject {
     func saveOnQuit() { save() }
 
     private func save() {
+        guard !isRestoring else { return }
         prefs.volume = engine.volume
         prefs.eqGains = engine.eqGains
         prefs.eqEnabled = engine.eqEnabled
@@ -424,6 +431,8 @@ final class PlayerController: ObservableObject {
     }
 
     private func restorePreferences() {
+        isRestoring = true
+        defer { isRestoring = false }
         if let volume = prefs.volume { engine.volume = volume }
         if let gains = prefs.eqGains, gains.count == 10 { engine.eqGains = gains }
         engine.eqEnabled = prefs.eqEnabled ?? true

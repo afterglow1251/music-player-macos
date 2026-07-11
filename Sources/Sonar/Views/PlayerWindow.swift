@@ -322,11 +322,8 @@ struct PlayerWindow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
-                Text(timeString(isScrubbing ? scrubTime : engine.currentTime)
-                     + " / " + timeString(engine.duration))
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(accent)
-                    .fixedSize()
+                SeekTimeLabel(clock: engine.clock, isScrubbing: isScrubbing,
+                              scrubTime: scrubTime, accent: accent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -343,38 +340,8 @@ struct PlayerWindow: View {
     // MARK: Position slider
 
     private var positionSlider: some View {
-        GeometryReader { geo in
-            Slider(
-                value: Binding(
-                    get: { isScrubbing ? scrubTime : engine.currentTime },
-                    set: { scrubTime = $0 }
-                ),
-                in: 0...max(engine.duration, 0.01),
-                onEditingChanged: { editing in
-                    isScrubbing = editing
-                    if !editing { engine.seek(to: scrubTime) }
-                }
-            )
-            .controlSize(.small)
-            .tint(accent)
-            .disabled(engine.duration <= 0)
-            // Hover anywhere on the bar to preview the time at that position.
-            .overlay {
-                if let x = seekHoverX, engine.duration > 0 {
-                    let frac = min(max(x / geo.size.width, 0), 1)
-                    TooltipLabel(text: timeString(frac * engine.duration))
-                        .position(x: min(max(x, 24), geo.size.width - 24), y: -18)
-                        .allowsHitTesting(false)
-                }
-            }
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let point): seekHoverX = point.x
-                case .ended: seekHoverX = nil
-                }
-            }
-        }
-        .frame(height: 22)
+        SeekSlider(clock: engine.clock, engine: engine, accent: accent,
+                   isScrubbing: $isScrubbing, scrubTime: $scrubTime, seekHoverX: $seekHoverX)
     }
 
     // MARK: Transport
@@ -474,7 +441,7 @@ struct PlayerWindow: View {
                 SettingsView(controller: controller, width: width, height: height)
                     .transition(.opacity)
             } else if showLyrics {
-                LyricsView(controller: controller, width: width, height: height)
+                LyricsView(controller: controller, clock: engine.clock, width: width, height: height)
                     .transition(.opacity)
             } else {
                 heroArtView(width: width, height: height)
@@ -1008,8 +975,11 @@ struct PlayerWindow: View {
     }
 
     private var viewBinding: Binding<LibraryView> {
+        // No withAnimation here: animating a full reorder of the (lazy) list makes
+        // SwiftUI compute transitions for every row, which for a large library
+        // takes seconds. Snap to the new order instead — it's instant.
         Binding(get: { controller.library.view },
-                set: { new in withAnimation(.easeInOut(duration: 0.2)) { controller.library.setView(new) } })
+                set: { new in controller.library.setView(new) })
     }
 
     // MARK: Artist sections
@@ -1092,6 +1062,9 @@ struct PlayerWindow: View {
     private func handleLibraryReorder(path: String, cursorY: CGFloat) {
         if draggingID != path { draggingID = path }
         dragCursorY = cursorY
+        // Frames are only reported once a drag is active, so the first tick may
+        // arrive before any are known — wait for them rather than snapping to 0.
+        guard !rowFrames.isEmpty else { return }
         let others = filteredTracks.filter { $0.url.path != path }
         let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
         if controller.library.tracks.firstIndex(where: { $0.url.path == path }) != target {
@@ -1103,6 +1076,7 @@ struct PlayerWindow: View {
     private func handlePlaylistReorder(path: String, in playlist: Playlist, cursorY: CGFloat) {
         if draggingID != path { draggingID = path }
         dragCursorY = cursorY
+        guard !rowFrames.isEmpty else { return }
         let others = playlistTracks.filter { $0.url.path != path }
         let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
         if selectedPlaylist?.trackPaths.firstIndex(of: path) != target {
@@ -1116,6 +1090,7 @@ struct PlayerWindow: View {
     private func handleQueueReorder(id: String, cursorY: CGFloat) {
         if draggingID != id { draggingID = id }
         dragCursorY = cursorY
+        guard !rowFrames.isEmpty else { return }
         guard let uid = UUID(uuidString: id) else { return }
         let others = controller.queue.filter { $0.id.uuidString != id }
         let target = others.filter { (rowFrames[$0.id.uuidString]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
@@ -1525,9 +1500,75 @@ struct PlayerWindow: View {
         artworkImage = track?.artworkData.flatMap { NSImage(data: $0) }
     }
 
-    private func timeString(_ t: TimeInterval) -> String {
-        guard t.isFinite, t >= 0 else { return "00:00" }
-        let total = Int(t)
-        return String(format: "%02d:%02d", total / 60, total % 60)
+    private func timeString(_ t: TimeInterval) -> String { clockTimeString(t) }
+}
+
+private func clockTimeString(_ t: TimeInterval) -> String {
+    guard t.isFinite, t >= 0 else { return "00:00" }
+    let total = Int(t)
+    return String(format: "%02d:%02d", total / 60, total % 60)
+}
+
+/// The "00:34 / 03:12" readout. Observes the clock so only this label — not the
+/// whole window — re-renders as the position ticks.
+private struct SeekTimeLabel: View {
+    @ObservedObject var clock: PlaybackClock
+    let isScrubbing: Bool
+    let scrubTime: TimeInterval
+    let accent: Color
+
+    var body: some View {
+        Text(clockTimeString(isScrubbing ? scrubTime : clock.currentTime)
+             + " / " + clockTimeString(clock.duration))
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(accent)
+            .fixedSize()
+    }
+}
+
+/// The position slider. Observes the clock for the live position; scrub/hover
+/// state is bound back to the parent. Isolated so ticking doesn't re-render the
+/// rest of the window.
+private struct SeekSlider: View {
+    @ObservedObject var clock: PlaybackClock
+    let engine: AudioEngine
+    let accent: Color
+    @Binding var isScrubbing: Bool
+    @Binding var scrubTime: TimeInterval
+    @Binding var seekHoverX: CGFloat?
+
+    var body: some View {
+        GeometryReader { geo in
+            Slider(
+                value: Binding(
+                    get: { isScrubbing ? scrubTime : clock.currentTime },
+                    set: { scrubTime = $0 }
+                ),
+                in: 0...max(clock.duration, 0.01),
+                onEditingChanged: { editing in
+                    isScrubbing = editing
+                    if !editing { engine.seek(to: scrubTime) }
+                }
+            )
+            .controlSize(.small)
+            .tint(accent)
+            .disabled(clock.duration <= 0)
+            // Hover anywhere on the bar to preview the time at that position.
+            .overlay {
+                if let x = seekHoverX, clock.duration > 0 {
+                    let frac = min(max(x / geo.size.width, 0), 1)
+                    TooltipLabel(text: clockTimeString(frac * clock.duration))
+                        .position(x: min(max(x, 24), geo.size.width - 24), y: -18)
+                        .allowsHitTesting(false)
+                }
+            }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point): seekHoverX = point.x
+                case .ended: seekHoverX = nil
+                }
+            }
+        }
+        .frame(height: 22)
     }
 }

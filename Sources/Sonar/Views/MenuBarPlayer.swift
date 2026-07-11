@@ -38,7 +38,7 @@ final class MenuBarController {
         p.animationBehavior = .none
 
         let hosting = NSHostingController(
-            rootView: MiniPlayerView(controller: controller) { Self.showMainWindow() }
+            rootView: MiniPlayerView(controller: controller, clock: controller.engine.clock) { Self.showMainWindow() }
         )
         p.contentViewController = hosting
         return p
@@ -192,6 +192,9 @@ final class MenuBarController {
 /// The compact now-playing panel shown from the menu-bar button.
 private struct MiniPlayerView: View {
     @ObservedObject var controller: PlayerController
+    /// Observed directly so the progress bar tracks playback — currentTime no
+    /// longer flows through `controller`.
+    @ObservedObject var clock: PlaybackClock
     let onShowMain: () -> Void
 
     private var engine: AudioEngine { controller.engine }
@@ -268,8 +271,8 @@ private struct MiniPlayerView: View {
             // triggers a key-window change that blinks the status button's
             // highlight. Drawing the fill ourselves needs neither.
             MiniScrubber(
-                time: isScrubbing ? scrubTime : engine.currentTime,
-                duration: engine.duration,
+                time: isScrubbing ? scrubTime : clock.currentTime,
+                duration: clock.duration,
                 accent: accent,
                 onScrub: { t in
                     isScrubbing = true
@@ -281,9 +284,9 @@ private struct MiniPlayerView: View {
                 }
             )
             HStack {
-                Text(Self.time(engine.currentTime)).font(.system(size: 9, design: .monospaced))
+                Text(Self.time(clock.currentTime)).font(.system(size: 9, design: .monospaced))
                 Spacer()
-                Text(Self.time(engine.duration)).font(.system(size: 9, design: .monospaced))
+                Text(Self.time(clock.duration)).font(.system(size: 9, design: .monospaced))
             }
             .foregroundStyle(.secondary)
         }

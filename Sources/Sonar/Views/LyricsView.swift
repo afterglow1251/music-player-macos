@@ -4,6 +4,10 @@ import SwiftUI
 /// The active line is highlighted and kept centered; the rest dim with distance.
 struct LyricsView: View {
     @ObservedObject var controller: PlayerController
+    /// Observed directly so the highlighted line tracks playback — currentTime no
+    /// longer flows through `controller`, so observing it here keeps the rest of
+    /// the app off the ~10 Hz tick.
+    @ObservedObject var clock: PlaybackClock
     var width: CGFloat
     var height: CGFloat
 
@@ -11,7 +15,7 @@ struct LyricsView: View {
     private let accent = Theme.accent
 
     private var activeIndex: Int? {
-        controller.lyrics.activeIndex(at: engine.currentTime)
+        controller.lyrics.activeIndex(at: clock.currentTime)
     }
 
     var body: some View {
@@ -40,7 +44,10 @@ struct LyricsView: View {
     private var scroller: some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 12) {
+                // Lazy so the whole song's worth of lines isn't rebuilt on every
+                // currentTime tick (the controller republishes ~10×/s); only the
+                // visible lines re-evaluate.
+                LazyVStack(alignment: .leading, spacing: 12) {
                     // Small top inset so the first line starts near the top; a large
                     // bottom inset so the last line can still center during playback.
                     Color.clear.frame(height: 24)

@@ -326,8 +326,12 @@ struct ReorderDragModifier: ViewModifier {
                 .offset(y: draggingID == id ? cursorY - (frames[id]?.midY ?? cursorY) : 0)
                 .zIndex(draggingID == id ? 1 : 0)
                 .background(GeometryReader { proxy in
+                    // Only report frames while a drag is actually active. Reporting on
+                    // every scroll frame otherwise churns this preference (and the
+                    // parent's @State via onPreferenceChange), which showed up as
+                    // scroll jank / high CPU even when nothing was being dragged.
                     Color.clear.preference(key: RowFrameKey.self,
-                                           value: [id: proxy.frame(in: .named("reorder"))])
+                                           value: draggingID != nil ? [id: proxy.frame(in: .named("reorder"))] : [:])
                 })
         } else {
             content
