@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:winamp-mac}",
+      "name": "Debug Sonar",
+      "target": "Sonar",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Sonar"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:winamp-mac}",
+      "name": "Release Sonar",
+      "target": "Sonar",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Sonar"
+    }
+  ]
+}

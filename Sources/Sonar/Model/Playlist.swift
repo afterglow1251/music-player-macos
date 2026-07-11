@@ -18,9 +18,14 @@ struct Playlist: Identifiable, Codable, Equatable {
 final class PlaylistStore: ObservableObject {
     @Published private(set) var playlists: [Playlist] = []
 
-    private let prefs = Preferences()
+    private let prefs: Preferences
 
-    init() { load() }
+    /// `prefs` is injectable so tests can use an isolated UserDefaults suite
+    /// instead of touching the real one.
+    init(prefs: Preferences = Preferences()) {
+        self.prefs = prefs
+        load()
+    }
 
     // MARK: Mutation
 
