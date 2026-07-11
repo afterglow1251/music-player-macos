@@ -3,14 +3,13 @@ import Foundation
 /// How the library list is ordered. `manual` is the hand-arranged drag order
 /// (persisted as `libraryOrder`); the rest sort by a track field.
 enum LibrarySort: String, CaseIterable {
-    case manual, title, artist, album, dateAdded
+    case manual, title, artist, dateAdded
 
     var label: String {
         switch self {
         case .manual:    return "Manual"
         case .title:     return "Title"
         case .artist:    return "Artist"
-        case .album:     return "Album"
         case .dateAdded: return "Date added"
         }
     }

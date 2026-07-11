@@ -199,8 +199,7 @@ final class MusicLibrary: ObservableObject {
         switch sort {
         case .manual:    return manuallyOrdered(list)
         case .title:     return list.sorted { titleKey($0) < titleKey($1) }
-        case .artist:    return list.sorted(by: albumTrackOrder(artistFirst: true))
-        case .album:     return list.sorted(by: albumTrackOrder(artistFirst: false))
+        case .artist:    return list.sorted(by: artistTrackOrder)
         case .dateAdded: return list.sorted { ($0.dateAdded ?? .distantPast) > ($1.dateAdded ?? .distantPast) }
         }
     }
@@ -226,16 +225,12 @@ final class MusicLibrary: ObservableObject {
 
     private func titleKey(_ t: Track) -> String { t.displayTitle.lowercased() }
 
-    /// Group tracks so an album reads in the right order: (optionally artist →)
-    /// album → track number → title. Untagged fields sort last within their level.
-    private func albumTrackOrder(artistFirst: Bool) -> (Track, Track) -> Bool {
+    /// Order tracks by artist → track number → title, so one artist's tracks read
+    /// in a sensible order. Untagged fields sort last within their level.
+    private var artistTrackOrder: (Track, Track) -> Bool {
         { a, b in
-            if artistFirst {
-                let x = a.artist.lowercased(), y = b.artist.lowercased()
-                if x != y { return x.isEmpty ? false : (y.isEmpty ? true : x < y) }
-            }
-            let al = a.album.lowercased(), bl = b.album.lowercased()
-            if al != bl { return al.isEmpty ? false : (bl.isEmpty ? true : al < bl) }
+            let x = a.artist.lowercased(), y = b.artist.lowercased()
+            if x != y { return x.isEmpty ? false : (y.isEmpty ? true : x < y) }
             let an = a.trackNumber ?? Int.max, bn = b.trackNumber ?? Int.max
             if an != bn { return an < bn }
             return a.displayTitle.localizedCaseInsensitiveCompare(b.displayTitle) == .orderedAscending

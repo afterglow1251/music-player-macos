@@ -17,8 +17,8 @@ struct PlayerWindow: View {
     @State private var rowFrames: [String: CGRect] = [:]
     @State private var draggingID: String?
     @State private var dragCursorY: CGFloat = 0
-    // Auto-grouping of the library list into collapsible sections.
-    @State private var grouping: LibraryGrouping = .none
+    // Group the library list by artist into collapsible sections.
+    @State private var groupByArtist = false
     @State private var collapsedGroups: Set<String> = []
     // Source switcher: nil = the whole library, otherwise the viewed playlist.
     @State private var selectedPlaylistID: Playlist.ID?
@@ -887,14 +887,14 @@ struct PlayerWindow: View {
                     if filteredTracks.isEmpty {
                         emptyMessage("No tracks match “\(searchText)”")
                     }
-                    if grouping != .none && searchText.isEmpty {
-                        // Collapsible auto-group sections, each playable as its own scope.
+                    if groupByArtist && searchText.isEmpty {
+                        // Collapsible per-artist sections, each playable as its own scope.
                         ForEach(librarySections) { section in
                             groupHeader(section)
                             if !collapsedGroups.contains(section.id) {
                                 ForEach(section.tracks) { track in
                                     libraryRow(track, reorderID: nil, scope: section.tracks,
-                                               showArtist: grouping != .artist)
+                                               showArtist: false)
                                 }
                             }
                         }
@@ -983,7 +983,7 @@ struct PlayerWindow: View {
 
     /// Header menu: choose the library sort order and how it's auto-sectioned.
     private var sortGroupMenu: some View {
-        let active = grouping != .none || controller.library.sort != .manual
+        let active = groupByArtist || controller.library.sort != .manual
         return Menu {
             Section("Sort by") {
                 Picker("Sort", selection: sortBinding) {
@@ -992,12 +992,8 @@ struct PlayerWindow: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
             }
-            Section("Group by") {
-                Picker("Group", selection: groupBinding) {
-                    ForEach(LibraryGrouping.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
+            Section("Group") {
+                Toggle("Group by artist", isOn: groupByArtistBinding)
             }
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
@@ -1016,30 +1012,19 @@ struct PlayerWindow: View {
                 set: { controller.library.setSort($0) })
     }
 
-    private var groupBinding: Binding<LibraryGrouping> {
-        Binding(get: { grouping },
-                set: { new in withAnimation(.easeInOut(duration: 0.2)) { grouping = new } })
+    private var groupByArtistBinding: Binding<Bool> {
+        Binding(get: { groupByArtist },
+                set: { new in withAnimation(.easeInOut(duration: 0.2)) { groupByArtist = new } })
     }
 
-    // MARK: Auto-groups (by artist / album)
+    // MARK: Auto-groups (by artist)
 
-    /// The library split into collapsible sections per the current `grouping`.
-    /// Album sections read in track-number order; sections are alphabetical.
+    /// The library split into collapsible per-artist sections (alphabetical).
+    /// Empty when artist grouping is off — the flat list is shown instead.
     private var librarySections: [LibrarySection] {
-        let key: (Track) -> String
-        switch grouping {
-        case .none:   return []
-        case .artist: key = { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
-        case .album:  key = { $0.album.isEmpty ? "Unknown Album" : $0.album }
-        }
-        return Dictionary(grouping: filteredTracks, by: key)
-            .map { entry in
-                let tracks = grouping == .album
-                    ? entry.value.sorted { ($0.trackNumber ?? .max, $0.displayTitle.lowercased())
-                                         < ($1.trackNumber ?? .max, $1.displayTitle.lowercased()) }
-                    : entry.value
-                return LibrarySection(id: entry.key, tracks: tracks)
-            }
+        guard groupByArtist else { return [] }
+        return Dictionary(grouping: filteredTracks) { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
+            .map { LibrarySection(id: $0.key, tracks: $0.value) }
             .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
     }
 

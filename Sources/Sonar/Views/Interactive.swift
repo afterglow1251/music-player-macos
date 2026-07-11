@@ -112,21 +112,8 @@ struct PressableButtonStyle: ButtonStyle {
 
 /// A named group of tracks shown as a collapsible section in the library.
 struct LibrarySection: Identifiable {
-    let id: String        // artist name / album name / playlist name
+    let id: String        // artist name / playlist name
     let tracks: [Track]
-}
-
-/// How the library list is auto-sectioned. `none` = one flat list.
-enum LibraryGrouping: String, CaseIterable {
-    case none, artist, album
-
-    var label: String {
-        switch self {
-        case .none:   return "None"
-        case .artist: return "Artist"
-        case .album:  return "Album"
-        }
-    }
 }
 
 /// One entry in a row's "Add to Playlist ▸" submenu. `contains` marks playlists
