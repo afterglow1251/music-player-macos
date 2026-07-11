@@ -1032,29 +1032,37 @@ struct PlayerWindow: View {
 
     private func groupHeader(_ section: LibrarySection) -> some View {
         let collapsed = collapsedGroups.contains(section.id)
-        return HStack(spacing: 8) {
-            Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(width: 14)
-            Text(section.id)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
-                .lineLimit(1)
-            Text("\(section.tracks.count)")
-                .font(.system(size: 10, design: .rounded))
-                .foregroundStyle(.white.opacity(0.35))
-            Spacer()
-            Button { controller.playGroup(section.tracks) } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 10))
+        return VStack(spacing: 0) {
+            // Hairline above each section so the groups read as distinct blocks.
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+                .padding(.horizontal, 6)
+            HStack(spacing: 8) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(accent.opacity(0.7))
+                    .frame(width: 14)
+                // Accent-colored, uppercased label so a section name never blends
+                // with the white track titles below it.
+                Text(section.id.uppercased())
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(accent)
-                    .frame(width: 22, height: 22).contentShape(Rectangle())
+                    .lineLimit(1)
+                    .tracking(0.5)
+                Text("\(section.tracks.count)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(accent.opacity(0.5))
+                Spacer()
+                Button { controller.playGroup(section.tracks) } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(accent)
+                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .tooltip("Play")
             }
-            .buttonStyle(PressableButtonStyle())
-            .tooltip("Play")
+            .padding(.horizontal, 8).padding(.top, 7).padding(.bottom, 5)
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
         .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.18)) {
