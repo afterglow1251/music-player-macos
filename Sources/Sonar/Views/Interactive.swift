@@ -110,6 +110,14 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
+/// A named, collapsible artist section in the library (the "Various" section
+/// gathers every single-track artist so they don't each get their own header).
+struct LibrarySection: Identifiable {
+    let id: String        // artist name, or "Various"
+    let tracks: [Track]
+    let isVarious: Bool   // rows keep their own artist label in the Various bucket
+}
+
 /// One entry in a row's "Add to Playlist ▸" submenu. `contains` marks playlists
 /// the track is already in (shown with a checkmark); `add` performs the insert.
 struct PlaylistMenuItem: Identifiable {

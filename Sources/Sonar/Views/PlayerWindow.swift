@@ -17,6 +17,8 @@ struct PlayerWindow: View {
     @State private var rowFrames: [String: CGRect] = [:]
     @State private var draggingID: String?
     @State private var dragCursorY: CGFloat = 0
+    // Collapsed artist sections (Artist view).
+    @State private var collapsedGroups: Set<String> = []
     // Source switcher: nil = the whole library, otherwise the viewed playlist.
     @State private var selectedPlaylistID: Playlist.ID?
     @State private var renamingPlaylist = false
@@ -884,10 +886,23 @@ struct PlayerWindow: View {
                     if filteredTracks.isEmpty {
                         emptyMessage("No tracks match “\(searchText)”")
                     }
-                    // Flat list in the chosen browse order; the artist is shown under
-                    // each title, so there's no need for per-artist section headers.
-                    ForEach(filteredTracks) { track in
-                        libraryRow(track)
+                    if controller.library.view == .artist && searchText.isEmpty {
+                        // Collapsible per-artist sections; single-track artists are
+                        // gathered into one "Various" group so there's no header wall.
+                        ForEach(artistSections) { section in
+                            groupHeader(section)
+                            if !collapsedGroups.contains(section.id) {
+                                ForEach(section.tracks) { track in
+                                    libraryRow(track, showArtist: section.isVarious)
+                                }
+                            }
+                        }
+                    } else {
+                        // Flat list (Recent / A–Z, or while searching); artist shown
+                        // under each title.
+                        ForEach(filteredTracks) { track in
+                            libraryRow(track)
+                        }
                     }
                 }
             }
@@ -902,7 +917,8 @@ struct PlayerWindow: View {
 
     /// One library row. The library is always shown in a sorted browse order, so
     /// there's no drag-to-reorder here — custom order lives in playlists/the queue.
-    private func libraryRow(_ track: Track) -> some View {
+    /// `showArtist` is off inside a named artist section (the header already names it).
+    private func libraryRow(_ track: Track, showArtist: Bool = true) -> some View {
         TrackRowView(
             track: track,
             isCurrent: controller.currentTrack == track,
@@ -912,6 +928,7 @@ struct PlayerWindow: View {
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },
+            showArtist: showArtist,
             queueHasItems: !controller.queue.isEmpty,
             addToPlaylists: playlistMenuItems(for: track),
             onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) }
@@ -978,6 +995,72 @@ struct PlayerWindow: View {
     private var viewBinding: Binding<LibraryView> {
         Binding(get: { controller.library.view },
                 set: { new in withAnimation(.easeInOut(duration: 0.2)) { controller.library.setView(new) } })
+    }
+
+    // MARK: Artist sections
+
+    /// Artist view sections: every artist with 2+ tracks becomes its own section
+    /// (alphabetical, tracks in track-number order), and all single-track artists
+    /// are gathered into one "Various" section at the end — so a diverse library
+    /// isn't a wall of one-line headers.
+    private var artistSections: [LibrarySection] {
+        let groups = Dictionary(grouping: filteredTracks) { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
+        var sections: [LibrarySection] = []
+        var singles: [Track] = []
+        for (name, tracks) in groups {
+            if tracks.count >= 2 {
+                let ordered = tracks.sorted {
+                    ($0.trackNumber ?? .max, $0.displayTitle.lowercased())
+                        < ($1.trackNumber ?? .max, $1.displayTitle.lowercased())
+                }
+                sections.append(LibrarySection(id: name, tracks: ordered, isVarious: false))
+            } else {
+                singles.append(contentsOf: tracks)
+            }
+        }
+        sections.sort { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
+        if !singles.isEmpty {
+            let ordered = singles.sorted {
+                let a = $0.artist.lowercased(), b = $1.artist.lowercased()
+                if a != b { return a < b }
+                return $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending
+            }
+            sections.append(LibrarySection(id: "Various", tracks: ordered, isVarious: true))
+        }
+        return sections
+    }
+
+    private func groupHeader(_ section: LibrarySection) -> some View {
+        let collapsed = collapsedGroups.contains(section.id)
+        return HStack(spacing: 8) {
+            Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 14)
+            Text(section.id)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1)
+            Text("\(section.tracks.count)")
+                .font(.system(size: 10, design: .rounded))
+                .foregroundStyle(.white.opacity(0.35))
+            Spacer()
+            Button { controller.playGroup(section.tracks) } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(accent)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle())
+            .tooltip("Play")
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                if collapsed { collapsedGroups.remove(section.id) } else { collapsedGroups.insert(section.id) }
+            }
+        }
     }
 
     /// Reorder within a playlist live from the cursor's y position.
