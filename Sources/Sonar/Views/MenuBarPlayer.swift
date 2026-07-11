@@ -2,6 +2,13 @@ import AppKit
 import SwiftUI
 import Combine
 
+/// Whether the main player window is already the frontmost, focused window —
+/// i.e. whether the panel's "show main window" button would have nothing to do.
+@MainActor
+final class MainWindowVisibility: ObservableObject {
+    @Published var isFrontmost = false
+}
+
 /// A menu-bar presence for Sonar: a status-bar button that reflects play state and
 /// pops a compact now-playing panel with transport controls — so you can steer
 /// playback without leaving whatever app you're in.
@@ -9,6 +16,7 @@ import Combine
 final class MenuBarController {
     private let controller: PlayerController
     private let statusItem: NSStatusItem
+    private let windowVisibility = MainWindowVisibility()
     private var cancellable: AnyCancellable?
     private var clickMonitor: Any?
     private var pressMonitor: Any?
@@ -23,13 +31,10 @@ final class MenuBarController {
         )
         p.isFloatingPanel = true
         p.level = .popUpMenu
-        // Without .fullScreenAuxiliary, the panel isn't recognized as belonging
-        // to a fullscreen app's Space — it still draws on top (thanks to the
-        // popUpMenu level), but outside clicks land in a Space the panel isn't
-        // properly attached to, so the click-to-dismiss monitor never tears it
-        // down. .stationary keeps it from participating in Exposé/Spaces drag;
-        // .ignoresCycle keeps it out of Cmd-` window cycling.
-        p.collectionBehavior = [.fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // .canJoinAllSpaces (not .fullScreenAuxiliary, which only pairs a window
+        // with *this app's own* fullscreen window) is what lets a menu-bar-anchored
+        // panel stay interactive while some *other* app owns the fullscreen Space.
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         p.hasShadow = true
         p.isOpaque = false
         p.backgroundColor = .clear
@@ -38,9 +43,35 @@ final class MenuBarController {
         p.animationBehavior = .none
 
         let hosting = NSHostingController(
-            rootView: MiniPlayerView(controller: controller, clock: controller.engine.clock) { Self.showMainWindow() }
+            rootView: MiniPlayerView(controller: controller, clock: controller.engine.clock,
+                                      windowVisibility: windowVisibility) { [weak self] in
+                // Close the panel first — otherwise the main window becoming key
+                // flips `windowVisibility.isFrontmost` while the panel is still
+                // showing, and the header re-lays-out (button vanishing, artist
+                // label shifting) right before your eyes.
+                self?.dismiss()
+                Self.showMainWindow()
+            }
         )
         p.contentViewController = hosting
+
+        // Dismiss the moment a Spaces swipe / Mission Control gesture starts.
+        // During those transitions the WindowServer hides stationary
+        // all-spaces windows like this panel, which flips its occlusion state
+        // to not-visible — the earliest signal we get that a space gesture
+        // began. Without this, a half-swipe that snaps back would "restore" a
+        // panel the user expected gone (native popovers close for good), and a
+        // completed swipe only closed it ~1s later via app-activation.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: p, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isPanelOpen,
+                      !self.panel.occlusionState.contains(.visible)
+                else { return }
+                self.dismiss()
+            }
+        }
         return p
     }()
 
@@ -63,19 +94,94 @@ final class MenuBarController {
         // ever competes with our `isHighlighted` state. Opening on press also
         // matches native menu-bar menus. (Cmd-click passes through so the item
         // can still be drag-reordered in the menu bar.)
-        pressMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            guard let self, let button = self.statusItem.button,
-                  event.window === button.window,
-                  !event.modifierFlags.contains(.command)
-            else { return event }
-            self.togglePanel(nil)
-            return nil
+        //
+        // This same monitor also dismisses the panel on clicks elsewhere in our
+        // OWN app's windows (e.g. the main player window, including while it's
+        // fullscreen) — the global monitor below only sees clicks in *other*
+        // apps, so without this a click on our own window never closed the panel.
+        pressMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            if let button = self.statusItem.button, event.type == .leftMouseDown,
+               event.window === button.window, !event.modifierFlags.contains(.command) {
+                self.togglePanel(nil)
+                return nil
+            }
+            if self.isPanelOpen, event.window !== self.panel {
+                self.dismiss()
+            }
+            return event
         }
+
+        // Also dismiss when the app resigns active (e.g. Cmd-Tab to another app)
+        // — a plain click-away monitor never fires for that since no click occurs.
+        //
+        // `willResignActive`, not `didResignActive`: "did" only fires once macOS
+        // has *finished* animating the app switch (~0.3-0.5s later), so the panel
+        // sat on screen through the whole transition before closing. "will" fires
+        // right as the switch starts, so the panel is gone before the animation
+        // even plays.
+        //
+        // `MainActor.assumeIsolated`, not `Task { @MainActor in ... }`: `queue:
+        // .main` already guarantees this closure runs on the main thread, so
+        // hopping through a Task would just defer the dismiss to the next runloop
+        // turn — long enough for the panel to visibly flash before closing.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dismiss() }
+        }
+
+        // `willResignActiveNotification` only fires when SONAR ITSELF was the
+        // active app — but the panel is a `.nonactivatingPanel`, so opening it
+        // from the menu bar never activates Sonar. The common case is: some
+        // other app is active, you open the panel, then swipe/switch to a
+        // different app — Sonar's active state never changes, so that
+        // notification never fires and the panel is only closed later by
+        // whatever unrelated click happens to hit the global click monitor.
+        // Watching the workspace-wide "an app became active" notification
+        // catches this regardless of whether Sonar was ever active.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.processIdentifier != ProcessInfo.processInfo.processIdentifier
+            else { return }
+            MainActor.assumeIsolated { self?.dismiss() }
+        }
+
+        // Backstop for space switches the occlusion observer (on the panel)
+        // might miss — e.g. Ctrl+arrow or clicking a Space in Mission Control.
+        // Fires when the switch commits, which still beats waiting for the
+        // other app's activation notification.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dismiss() }
+        }
+
+        // Keep the panel's "show main window" button hidden whenever it'd have
+        // nothing to do — i.e. whenever the main window is already the frontmost,
+        // focused window (including fullscreen: a fullscreen window is still key).
+        for name: Notification.Name in [
+            NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+            NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
+            NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
+        ] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshWindowVisibility() }
+            }
+        }
+        refreshWindowVisibility()
 
         cancellable = controller.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.refreshButton() }
         refreshButton()
+    }
+
+    private func refreshWindowVisibility() {
+        let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "player" })
+        windowVisibility.isFrontmost = NSApp.isActive && (window?.isKeyWindow ?? false)
     }
 
     private static let titleWidth: CGFloat = 160
@@ -195,6 +301,7 @@ private struct MiniPlayerView: View {
     /// Observed directly so the progress bar tracks playback — currentTime no
     /// longer flows through `controller`.
     @ObservedObject var clock: PlaybackClock
+    @ObservedObject var windowVisibility: MainWindowVisibility
     let onShowMain: () -> Void
 
     private var engine: AudioEngine { controller.engine }
@@ -228,14 +335,18 @@ private struct MiniPlayerView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    PressButton(action: onShowMain) {
-                        Image(systemName: "macwindow")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .padding(6)
-                            .contentShape(Rectangle())
+                    // Hidden (not just disabled) while the main window is already
+                    // frontmost — clicking it then would have nothing to do.
+                    if !windowVisibility.isFrontmost {
+                        PressButton(action: onShowMain) {
+                            Image(systemName: "macwindow")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .padding(6)
+                                .contentShape(Rectangle())
+                        }
+                        .help("Show Sonar")
                     }
-                    .help("Show Sonar")
                 }
                 if let artist = controller.currentTrack?.artist, !artist.isEmpty {
                     Text(artist)
