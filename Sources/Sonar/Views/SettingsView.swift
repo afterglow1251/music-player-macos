@@ -12,6 +12,7 @@ struct SettingsView: View {
 
     @State private var customMinutes = ""
     @State private var hoveredTheme: Int?
+    @State private var hoveredAlbum = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -94,14 +95,18 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 sectionTitle("VISUALIZER THEME")
-                Text("· \(VisualizerTheme.all[hoveredTheme ?? controller.themeIndex].name)")
+                Text("· \(themeLabel)")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundStyle(accent)
             }
             HStack(spacing: 7) {
+                albumSwatch
                 ForEach(Array(VisualizerTheme.all.enumerated()), id: \.offset) { index, theme in
-                    let selected = index == controller.themeIndex
-                    Button { controller.themeIndex = index } label: {
+                    let selected = !controller.albumTheme && index == controller.themeIndex
+                    Button {
+                        controller.albumTheme = false
+                        controller.themeIndex = index
+                    } label: {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(LinearGradient(colors: [theme.colors.first ?? .green,
                                                           theme.colors[theme.colors.count / 2],
@@ -119,6 +124,37 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// "Album" mode: tint the tiles from the current cover. The swatch itself stays
+    /// a neutral artwork glyph — only the tiles change color, not this button.
+    private var albumSwatch: some View {
+        let selected = controller.albumTheme
+        return Button { controller.albumTheme = true } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color(white: 0.2))
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .frame(width: 26, height: 26)
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(.white, lineWidth: selected ? 2 : 0))
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(.white.opacity(0.15), lineWidth: selected ? 0 : 1))
+        }
+        .buttonStyle(PressableButtonStyle())
+        .onHover { hoveredAlbum = $0 }
+        .help("Match the album cover")
+    }
+
+    /// Name shown beside the section title, tracking hover then selection.
+    private var themeLabel: String {
+        if hoveredAlbum { return "Album" }
+        if let index = hoveredTheme { return VisualizerTheme.all[index].name }
+        if controller.albumTheme { return "Album" }
+        return VisualizerTheme.all[controller.themeIndex].name
     }
 
     // MARK: Storage

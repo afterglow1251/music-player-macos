@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 enum RepeatMode: Int {
     case off = 0, all, one
@@ -35,7 +36,10 @@ final class PlayerController: ObservableObject {
     private let nowPlaying = NowPlayingController()
 
     @Published private(set) var currentTrack: Track? {
-        didSet { if currentTrack?.url != oldValue?.url { lyrics.load(for: currentTrack) } }
+        didSet {
+            if currentTrack?.url != oldValue?.url { lyrics.load(for: currentTrack) }
+            if currentTrack?.artworkData != oldValue?.artworkData { refreshAlbumTheme() }
+        }
     }
     @Published var urlInput: String = ""
 
@@ -48,11 +52,39 @@ final class PlayerController: ObservableObject {
     @Published var repeatMode: RepeatMode = .off { didSet { save() } }
     @Published var themeIndex = 0 { didSet { save() } }
 
-    var theme: VisualizerTheme {
-        VisualizerTheme.all[min(max(themeIndex, 0), VisualizerTheme.all.count - 1)]
+    /// When on, the visualizer tiles are tinted from the current cover instead of
+    /// the fixed preset at `themeIndex`.
+    @Published var albumTheme = false {
+        didSet {
+            if albumTheme { refreshAlbumTheme() }
+            save()
+        }
     }
 
-    func cycleTheme() { themeIndex = (themeIndex + 1) % VisualizerTheme.all.count }
+    /// Theme derived from the current cover (nil when off, or the cover has no
+    /// usable color). Cached so tiles don't re-decode the artwork every frame.
+    @Published private(set) var derivedAlbumTheme: VisualizerTheme?
+
+    var theme: VisualizerTheme {
+        if albumTheme, let derived = derivedAlbumTheme { return derived }
+        return VisualizerTheme.all[min(max(themeIndex, 0), VisualizerTheme.all.count - 1)]
+    }
+
+    func cycleTheme() {
+        albumTheme = false
+        themeIndex = (themeIndex + 1) % VisualizerTheme.all.count
+    }
+
+    /// Recompute the cover-derived theme. Cheap (downscales to 32×32), and only
+    /// runs when album mode is on so idle covers don't burn cycles.
+    private func refreshAlbumTheme() {
+        guard albumTheme, let data = currentTrack?.artworkData,
+              let image = NSImage(data: data) else {
+            derivedAlbumTheme = nil
+            return
+        }
+        derivedAlbumTheme = VisualizerTheme.fromArtwork(image)
+    }
     func cycleRepeat() {
         repeatMode = RepeatMode(rawValue: (repeatMode.rawValue + 1) % 3) ?? .off
     }
@@ -421,7 +453,8 @@ final class PlayerController: ObservableObject {
         prefs.eqEnabled = engine.eqEnabled
         prefs.shuffle = shuffle
         prefs.repeatMode = repeatMode
-        prefs.themeName = theme.name
+        prefs.themeName = VisualizerTheme.all[min(max(themeIndex, 0), VisualizerTheme.all.count - 1)].name
+        prefs.albumTheme = albumTheme
         // Only touch the last track/position when something is actually loaded —
         // otherwise a save while idle would wipe the value we want to restore.
         if let track = currentTrack {
@@ -442,6 +475,7 @@ final class PlayerController: ObservableObject {
            let index = VisualizerTheme.all.firstIndex(where: { $0.name == name }) {
             themeIndex = index
         }
+        albumTheme = prefs.albumTheme
     }
 
     private func restoreLastTrack(from tracks: [Track]) {

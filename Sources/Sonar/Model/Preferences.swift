@@ -37,7 +37,7 @@ final class Preferences {
 
     private enum Key: String {
         case volume, eqGains, eqEnabled, shuffle, repeatMode
-        case themeName, lastTrack, lastPosition, musicFolderBookmark
+        case themeName, albumTheme, lastTrack, lastPosition, musicFolderBookmark
         case libraryOrder, librarySort, playlists
     }
 
@@ -97,6 +97,12 @@ final class Preferences {
     var themeName: String? {
         get { defaults.string(forKey: Key.themeName.rawValue) }
         set { defaults.set(newValue, forKey: Key.themeName.rawValue) }
+    }
+
+    /// Whether the visualizer tiles are tinted from the current album cover.
+    var albumTheme: Bool {
+        get { defaults.bool(forKey: Key.albumTheme.rawValue) }
+        set { defaults.set(newValue, forKey: Key.albumTheme.rawValue) }
     }
 
     var lastTrack: String? {

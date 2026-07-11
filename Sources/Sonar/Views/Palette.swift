@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 enum Palette {
     /// The visualizer always sits on black.
@@ -107,5 +108,87 @@ struct VisualizerTheme: Identifiable, Equatable {
 
     private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> Color {
         Color(red: r / 255, green: g / 255, blue: b / 255)
+    }
+
+    // MARK: Album-derived theme
+
+    /// Name used for the theme generated from the current cover, so the settings
+    /// UI and persistence can recognise it.
+    static let albumName = "Album"
+
+    /// Build a visualizer theme from an album cover: pick the cover's most vibrant
+    /// color and fan it into a dark→bright, bottom-to-top gradient — the classic
+    /// tile look, tinted to match the artwork. Returns nil for covers with no
+    /// usable color (e.g. pure greyscale), so the caller can fall back to a preset.
+    static func fromArtwork(_ image: NSImage) -> VisualizerTheme? {
+        guard let accent = image.dominantVibrantColor() else { return nil }
+        return fromAccent(accent)
+    }
+
+    /// Fan a single accent color into the 16-step bottom→top gradient plus a peak
+    /// and oscilloscope color, matching the shape of the built-in presets.
+    static func fromAccent(_ accent: NSColor) -> VisualizerTheme {
+        let base = accent.usingColorSpace(.deviceRGB) ?? accent
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        base.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        // Guarantee a lively base even for muted covers.
+        let sat = max(s, 0.55)
+
+        func stop(_ satScale: CGFloat, _ brightness: CGFloat) -> (Double, Double, Double) {
+            let col = (NSColor(hue: h, saturation: min(sat * satScale, 1),
+                               brightness: brightness, alpha: 1)
+                .usingColorSpace(.deviceRGB)) ?? .white
+            return (Double(col.redComponent) * 255,
+                    Double(col.greenComponent) * 255,
+                    Double(col.blueComponent) * 255)
+        }
+
+        // Dark & saturated at the bottom → bright & desaturated at the top.
+        let stops = [stop(1.0, 0.35), stop(1.0, 0.70), stop(0.85, 1.0), stop(0.35, 1.0)]
+        return VisualizerTheme(
+            name: albumName,
+            colors: gradient(stops),
+            peak: Color(hue: Double(h), saturation: 0.12, brightness: 1.0),
+            oscilloscope: Color(hue: Double(h), saturation: Double(min(sat, 1)), brightness: 1.0))
+    }
+}
+
+private extension NSImage {
+    /// Downscale to a tiny bitmap and pick the most "vibrant" representative color
+    /// — the album's signature hue. Pixels are bucketed by hue and weighted by
+    /// saturation×brightness so dull/near-black backgrounds don't dominate.
+    func dominantVibrantColor() -> NSColor? {
+        guard let cg = cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let w = 32, h = 32
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        let bins = 12
+        var weight = [Double](repeating: 0, count: bins)
+        var rSum = [Double](repeating: 0, count: bins)
+        var gSum = [Double](repeating: 0, count: bins)
+        var bSum = [Double](repeating: 0, count: bins)
+
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let r = CGFloat(pixels[i]) / 255, g = CGFloat(pixels[i + 1]) / 255, b = CGFloat(pixels[i + 2]) / 255
+            var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
+            NSColor(red: r, green: g, blue: b, alpha: 1).getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha)
+            let vibrancy = Double(sat * sat * bri)   // favor colorful, non-dark pixels
+            guard vibrancy > 0.02 else { continue }
+            let bin = min(Int(hue * CGFloat(bins)), bins - 1)
+            weight[bin] += vibrancy
+            rSum[bin] += Double(r) * vibrancy
+            gSum[bin] += Double(g) * vibrancy
+            bSum[bin] += Double(b) * vibrancy
+        }
+
+        guard let best = weight.indices.max(by: { weight[$0] < weight[$1] }),
+              weight[best] > 0 else { return nil }
+        let total = weight[best]
+        return NSColor(red: CGFloat(rSum[best] / total), green: CGFloat(gSum[best] / total),
+                       blue: CGFloat(bSum[best] / total), alpha: 1)
     }
 }
