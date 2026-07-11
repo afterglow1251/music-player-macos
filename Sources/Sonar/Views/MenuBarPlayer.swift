@@ -19,6 +19,9 @@ final class MenuBarController {
         if let button = statusItem.button {
             button.image = Self.icon(playing: false)
             button.imagePosition = .imageLeading
+            // Anchor the icon to the left edge so it never drifts when the title
+            // truncates within the fixed-width slot.
+            button.alignment = .left
             button.action = #selector(togglePopover(_:))
             button.target = self
         }
@@ -39,21 +42,34 @@ final class MenuBarController {
 
     // MARK: Button
 
+    /// Fixed slot width while a title is shown, so the item — and the popover
+    /// anchored to its centre — never shift as tracks change. Only play/pause
+    /// toggles the width (text ⇄ icon-only); track changes stay put.
+    private static let playingWidth: CGFloat = 160
+
     private func refreshButton() {
         guard let button = statusItem.button else { return }
         let playing = controller.engine.isPlaying
         button.image = Self.icon(playing: playing)
-        // Show a short title only while something is actually playing, so the menu
-        // bar stays quiet at rest.
+        // Show the title only while something is actually playing, so the menu
+        // bar stays quiet at rest. The slot is a fixed width and the title
+        // truncates within it, keeping everything to the left from jumping.
         if playing, let track = controller.currentTrack {
-            button.title = " " + Self.trim(track.displayTitle)
+            statusItem.length = Self.playingWidth
+            button.attributedTitle = Self.title(track.displayTitle)
         } else {
+            statusItem.length = NSStatusItem.variableLength
             button.title = ""
         }
     }
 
-    private static func trim(_ title: String, max: Int = 24) -> String {
-        title.count <= max ? title : String(title.prefix(max - 1)) + "…"
+    private static func title(_ text: String) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        return NSAttributedString(string: " " + text, attributes: [
+            .paragraphStyle: paragraph,
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+        ])
     }
 
     private static func icon(playing: Bool) -> NSImage? {
