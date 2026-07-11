@@ -164,12 +164,24 @@ private struct MiniPlayerView: View {
         let fraction = min(max(engine.currentTime / duration, 0), 1)
         return VStack(spacing: 3) {
             GeometryReader { geo in
+                let width = geo.size.width
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.12))
-                    Capsule().fill(accent).frame(width: geo.size.width * fraction)
+                    Capsule().fill(Color.primary.opacity(0.15)).frame(height: 4)
+                    Capsule().fill(accent).frame(width: width * fraction, height: 4)
                 }
+                // Taller invisible hit area so the thin bar is easy to grab; drag or
+                // click anywhere along it to seek.
+                .frame(height: 12)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0).onChanged { value in
+                        guard engine.duration > 0 else { return }
+                        let f = min(max(value.location.x / width, 0), 1)
+                        engine.seek(to: Double(f) * engine.duration)
+                    }
+                )
             }
-            .frame(height: 4)
+            .frame(height: 12)
             HStack {
                 Text(Self.time(engine.currentTime)).font(.system(size: 9, design: .monospaced))
                 Spacer()
