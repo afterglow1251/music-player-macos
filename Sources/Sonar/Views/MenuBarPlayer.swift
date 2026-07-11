@@ -73,7 +73,7 @@ final class MenuBarController {
 
     /// One stable icon, regardless of play state.
     private static let icon: NSImage? = {
-        let image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Sonar")
+        let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Sonar")
         image?.isTemplate = true
         return image
     }()
