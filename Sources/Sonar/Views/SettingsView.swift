@@ -126,17 +126,18 @@ struct SettingsView: View {
         }
     }
 
-    /// "Album" mode: tint the tiles from the current cover. The swatch itself stays
-    /// a neutral artwork glyph — only the tiles change color, not this button.
+    /// Tiles take their colors from the current song's cover. The swatch stays a
+    /// neutral "mixed colors" glyph — only the tiles recolor, not this button.
     private var albumSwatch: some View {
         let selected = controller.albumTheme
         return Button { controller.albumTheme = true } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color(white: 0.2))
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .fill(LinearGradient(colors: [Color(white: 0.26), Color(white: 0.14)],
+                                         startPoint: .top, endPoint: .bottom))
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
             }
             .frame(width: 26, height: 26)
             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -146,14 +147,14 @@ struct SettingsView: View {
         }
         .buttonStyle(PressableButtonStyle())
         .onHover { hoveredAlbum = $0 }
-        .help("Match the album cover")
+        .help("Mixes the tile colors from the current song's cover")
     }
 
     /// Name shown beside the section title, tracking hover then selection.
     private var themeLabel: String {
-        if hoveredAlbum { return "Album" }
+        if hoveredAlbum { return "Mixed from cover" }
         if let index = hoveredTheme { return VisualizerTheme.all[index].name }
-        if controller.albumTheme { return "Album" }
+        if controller.albumTheme { return "Mixed from cover" }
         return VisualizerTheme.all[controller.themeIndex].name
     }
 

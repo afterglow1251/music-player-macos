@@ -54,7 +54,7 @@ final class PlayerController: ObservableObject {
 
     /// When on, the visualizer tiles are tinted from the current cover instead of
     /// the fixed preset at `themeIndex`.
-    @Published var albumTheme = false {
+    @Published var albumTheme = true {
         didSet {
             if albumTheme { refreshAlbumTheme() }
             save()
@@ -475,7 +475,7 @@ final class PlayerController: ObservableObject {
            let index = VisualizerTheme.all.firstIndex(where: { $0.name == name }) {
             themeIndex = index
         }
-        albumTheme = prefs.albumTheme
+        albumTheme = prefs.albumTheme ?? true
     }
 
     private func restoreLastTrack(from tracks: [Track]) {

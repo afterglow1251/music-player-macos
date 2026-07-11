@@ -100,8 +100,9 @@ final class Preferences {
     }
 
     /// Whether the visualizer tiles are tinted from the current album cover.
-    var albumTheme: Bool {
-        get { defaults.bool(forKey: Key.albumTheme.rawValue) }
+    /// Optional so an unset value (fresh install) can default to on.
+    var albumTheme: Bool? {
+        get { defaults.object(forKey: Key.albumTheme.rawValue) as? Bool }
         set { defaults.set(newValue, forKey: Key.albumTheme.rawValue) }
     }
 
