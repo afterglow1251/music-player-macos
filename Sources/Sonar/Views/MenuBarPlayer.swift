@@ -9,8 +9,33 @@ import Combine
 final class MenuBarController {
     private let controller: PlayerController
     private let statusItem: NSStatusItem
-    private let popover = NSPopover()
     private var cancellable: AnyCancellable?
+    private var clickMonitor: Any?
+    private var pressMonitor: Any?
+    private var isPanelOpen = false
+
+    private lazy var panel: NSPanel = {
+        let p = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 268, height: 150),
+            styleMask: [.fullSizeContentView, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        p.isFloatingPanel = true
+        p.level = .popUpMenu
+        p.hasShadow = true
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.becomesKeyOnlyIfNeeded = true
+        p.hidesOnDeactivate = false
+        p.animationBehavior = .none
+
+        let hosting = NSHostingController(
+            rootView: MiniPlayerView(controller: controller) { Self.showMainWindow() }
+        )
+        p.contentViewController = hosting
+        return p
+    }()
 
     init(controller: PlayerController) {
         self.controller = controller
@@ -19,37 +44,35 @@ final class MenuBarController {
         if let button = statusItem.button {
             button.image = Self.icon
             button.imagePosition = .imageLeading
-            // Anchor the icon to the left edge so it never drifts when the title
-            // truncates within the fixed-width slot.
             button.alignment = .left
-            button.action = #selector(togglePopover(_:))
-            button.target = self
         }
 
-        popover.behavior = .transient
-        popover.animates = true
-        popover.contentSize = NSSize(width: 268, height: 150)
-        popover.contentViewController = NSHostingController(
-            rootView: MiniPlayerView(controller: controller, onShowMain: Self.showMainWindow)
-        )
+        // Toggle on mouse-DOWN via a local monitor that swallows the event,
+        // instead of a button action (which AppKit sends on mouse-up). A button
+        // action lets NSButtonCell run its press-tracking, and on mouse-up AppKit
+        // clears the highlight AFTER our code runs — sometimes a runloop
+        // iteration later — so a dark frame gets committed and the button blinks.
+        // Swallowing the mouse-down means that tracking never starts, so nothing
+        // ever competes with our `isHighlighted` state. Opening on press also
+        // matches native menu-bar menus. (Cmd-click passes through so the item
+        // can still be drag-reordered in the menu bar.)
+        pressMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self, let button = self.statusItem.button,
+                  event.window === button.window,
+                  !event.modifierFlags.contains(.command)
+            else { return event }
+            self.togglePanel(nil)
+            return nil
+        }
 
-        // Keep the menu-bar button in step with playback (icon + current title).
         cancellable = controller.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.refreshButton() }
         refreshButton()
     }
 
-    // MARK: Button
-
-    /// Fixed slot width when a title is shown, so the item (and the popover
-    /// anchored to it) never shifts.
     private static let titleWidth: CGFloat = 160
 
-    /// The menu-bar item depends ONLY on which track is loaded — never on play
-    /// state — so toggling play/pause leaves it perfectly still (no icon swap, no
-    /// resize). Same icon always; the title shows whenever a track is loaded
-    /// (playing or paused), truncated within a fixed slot.
     private func refreshButton() {
         guard let button = statusItem.button else { return }
         button.image = Self.icon
@@ -60,6 +83,9 @@ final class MenuBarController {
             statusItem.length = NSStatusItem.variableLength
             button.title = ""
         }
+        // Redrawing the button (icon/title) can drop the highlight, so re-assert
+        // the open-state indication every refresh.
+        setOpenIndication(isPanelOpen)
     }
 
     private static func title(_ text: String) -> NSAttributedString {
@@ -71,30 +97,86 @@ final class MenuBarController {
         ])
     }
 
-    /// One stable icon, regardless of play state.
     private static let icon: NSImage? = {
         let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Sonar")
         image?.isTemplate = true
         return image
     }()
 
-    // MARK: Popover
+    // MARK: Panel
 
-    @objc private func togglePopover(_ sender: Any?) {
+    private func togglePanel(_ sender: Any?) {
         guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(sender)
+        if panel.isVisible {
+            isPanelOpen = false
+            panel.orderOut(sender)
+            setOpenIndication(false)
+            removeClickMonitor()
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            // Size the panel to its SwiftUI content BEFORE positioning. On the
+            // first open the content hasn't laid out yet, so the panel still
+            // reports its placeholder height — if we position against that, the
+            // window then grows upward to fit and its top slides off-screen.
+            if let content = panel.contentView {
+                content.layoutSubtreeIfNeeded()
+                panel.setContentSize(content.fittingSize)
+            }
+            let buttonRect = button.convert(button.bounds, to: nil)
+            let screenRect = button.window?.convertToScreen(buttonRect) ?? .zero
+            panel.setFrameOrigin(NSPoint(
+                x: screenRect.midX - panel.frame.width / 2,
+                y: screenRect.minY - panel.frame.height - 4
+            ))
+            panel.orderFrontRegardless()
+            // NOTE: deliberately NOT making the panel key. Becoming key triggers a
+            // key-window change that redraws the status button mid-click and blinks
+            // its highlight OFF for a frame. The seek bar draws its own accent fill
+            // (see MiniScrubber), so it doesn't need the window to be key.
+            isPanelOpen = true
+            setOpenIndication(true)
+            installClickMonitor()
         }
     }
 
-    /// Bring the main player window back to the front (it may be closed/minimized).
+    /// Reflect the panel's open state on the status button, the way native
+    /// menu-bar menus stay lit while open.
+    ///
+    /// Uses `state = .on` + the persistent `isHighlighted` property — NOT the
+    /// momentary `highlight(_:)` method, which is the press-tracking API. Since
+    /// the mouse-down monitor swallows clicks before NSButtonCell can start
+    /// tracking, nothing in AppKit ever clears this state behind our back.
+    private func setOpenIndication(_ on: Bool) {
+        guard let button = statusItem.button else { return }
+        button.state = on ? .on : .off
+        button.isHighlighted = on
+    }
+
+    private func installClickMonitor() {
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+            [weak self] _ in
+            self?.dismiss()
+        }
+    }
+
+    private func removeClickMonitor() {
+        if let monitor = clickMonitor {
+            NSEvent.removeMonitor(monitor)
+            clickMonitor = nil
+        }
+    }
+
+    private func dismiss() {
+        isPanelOpen = false
+        panel.orderOut(nil)
+        setOpenIndication(false)
+        removeClickMonitor()
+    }
+
     private static func showMainWindow() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "player" }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         }
     }
@@ -118,6 +200,13 @@ private struct MiniPlayerView: View {
         }
         .padding(12)
         .frame(width: 268)
+        .background(VisualEffect(material: .menu))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+        )
+        .tint(accent)
     }
 
     private var header: some View {
@@ -166,22 +255,24 @@ private struct MiniPlayerView: View {
 
     private var progress: some View {
         VStack(spacing: 3) {
-            // The same native slider the main window uses, so the two bars match
-            // and pick up the system look (including vibrancy inside the popover).
-            Slider(
-                value: Binding(
-                    get: { isScrubbing ? scrubTime : engine.currentTime },
-                    set: { scrubTime = $0 }
-                ),
-                in: 0...max(engine.duration, 0.01),
-                onEditingChanged: { editing in
-                    isScrubbing = editing
-                    if !editing { engine.seek(to: scrubTime) }
+            // Custom-drawn scrubber rather than a native Slider: the panel is a
+            // non-key window, and AppKit draws a native slider's fill in the gray
+            // inactive style there. Making the panel key fixes the color but
+            // triggers a key-window change that blinks the status button's
+            // highlight. Drawing the fill ourselves needs neither.
+            MiniScrubber(
+                time: isScrubbing ? scrubTime : engine.currentTime,
+                duration: engine.duration,
+                accent: accent,
+                onScrub: { t in
+                    isScrubbing = true
+                    scrubTime = t
+                },
+                onCommit: { t in
+                    isScrubbing = false
+                    engine.seek(to: t)
                 }
             )
-            .controlSize(.small)
-            .tint(accent)
-            .disabled(engine.duration <= 0)
             HStack {
                 Text(Self.time(engine.currentTime)).font(.system(size: 9, design: .monospaced))
                 Spacer()
@@ -213,6 +304,72 @@ private struct MiniPlayerView: View {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
         let total = Int(seconds)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// A native visual-effect view (`NSVisualEffectView`) bridged for SwiftUI.
+private struct VisualEffect: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = blendingMode
+        v.state = .active
+        return v
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// A slim seek bar drawn in SwiftUI, styled after the small native slider:
+/// capsule track, accent-colored fill, round white knob. Drawn by hand so the
+/// fill keeps its accent color inside the non-key panel (a native Slider there
+/// renders its fill in the inactive gray).
+private struct MiniScrubber: View {
+    let time: TimeInterval
+    let duration: TimeInterval
+    let accent: Color
+    let onScrub: (TimeInterval) -> Void
+    let onCommit: (TimeInterval) -> Void
+
+    private static let knobSize: CGFloat = 11
+    private static let trackHeight: CGFloat = 3
+
+    var body: some View {
+        GeometryReader { geo in
+            let fraction = duration > 0 ? CGFloat(min(max(time / duration, 0), 1)) : 0
+            let knobX = (geo.size.width - Self.knobSize) * fraction
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(height: Self.trackHeight)
+                Capsule()
+                    .fill(accent)
+                    .frame(width: knobX + Self.knobSize / 2, height: Self.trackHeight)
+                Circle()
+                    .fill(.white)
+                    .frame(width: Self.knobSize, height: Self.knobSize)
+                    .shadow(color: .black.opacity(0.35), radius: 1, y: 0.5)
+                    .offset(x: knobX)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in onScrub(timeAt(value.location.x, width: geo.size.width)) }
+                    .onEnded { value in onCommit(timeAt(value.location.x, width: geo.size.width)) }
+            )
+        }
+        .frame(height: 14)
+        .opacity(duration > 0 ? 1 : 0.4)
+        .allowsHitTesting(duration > 0)
+    }
+
+    private func timeAt(_ x: CGFloat, width: CGFloat) -> TimeInterval {
+        guard width > 0, duration > 0 else { return 0 }
+        return TimeInterval(min(max(x / width, 0), 1)) * duration
     }
 }
 
