@@ -23,6 +23,13 @@ final class MenuBarController {
         )
         p.isFloatingPanel = true
         p.level = .popUpMenu
+        // Without .fullScreenAuxiliary, the panel isn't recognized as belonging
+        // to a fullscreen app's Space — it still draws on top (thanks to the
+        // popUpMenu level), but outside clicks land in a Space the panel isn't
+        // properly attached to, so the click-to-dismiss monitor never tears it
+        // down. .stationary keeps it from participating in Exposé/Spaces drag;
+        // .ignoresCycle keeps it out of Cmd-` window cycling.
+        p.collectionBehavior = [.fullScreenAuxiliary, .stationary, .ignoresCycle]
         p.hasShadow = true
         p.isOpaque = false
         p.backgroundColor = .clear
