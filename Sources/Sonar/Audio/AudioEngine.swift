@@ -214,7 +214,15 @@ final class AudioEngine: ObservableObject {
         basePlayed = 0
         player.stop()
 
-        let target = AVAudioFramePosition(max(0, min(time, duration)) * sampleRate)
+        // Never land on the file's very last frame: `schedule` would then have
+        // zero frames to play and schedule nothing, the node plays silence, and
+        // the progress timer prescheduls the NEXT track onto it — audio moves on
+        // but no completion callback is pending for the current segment, so the
+        // title/artwork/slider stay frozen on the old track until the next one
+        // ends. One frame short keeps a real segment (and its completion, which
+        // drives the normal end-of-track advance) in flight.
+        let target = min(AVAudioFramePosition(max(0, min(time, duration)) * sampleRate),
+                         max(0, totalFrames - 1))
         seekFrame = target
         currentTime = Double(target) / sampleRate
         schedule(from: target)
