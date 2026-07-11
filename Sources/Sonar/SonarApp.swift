@@ -35,12 +35,15 @@ extension Notification.Name {
 /// the front with a Dock icon.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var clickMonitor: Any?
+    private var menuBar: MenuBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NSApp.applicationIconImage = AppIcon.make()
         installClickToDismissFocus()
+        // Menu-bar mini-player, sharing the one player instance with the window.
+        menuBar = MenuBarController(controller: .shared)
     }
 
     /// Any left-click that isn't on a text field drops the keyboard focus — so

@@ -23,6 +23,10 @@ enum SleepMode: Equatable {
 /// playback preferences between launches.
 @MainActor
 final class PlayerController: ObservableObject {
+    /// The one player the whole app drives — shared by the main window and the
+    /// menu-bar mini-player so they stay in lockstep (same engine, same queue).
+    static let shared = PlayerController()
+
     let engine = AudioEngine()
     let library = MusicLibrary()
     let playlists = PlaylistStore()

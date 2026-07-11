@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// The main player window — a modern retro-skinned player: a big uncropped cover,
 /// a blurred artwork backdrop, glassy panels, and the classic tile visualizer.
 struct PlayerWindow: View {
-    @StateObject private var controller = PlayerController()
+    @StateObject private var controller = PlayerController.shared
     @State private var isFullscreen = false
     @State private var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
     @State private var visualizerMode: VisualizerMode = .spectrum
