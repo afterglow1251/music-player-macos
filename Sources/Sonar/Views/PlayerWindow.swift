@@ -625,6 +625,7 @@ struct PlayerWindow: View {
                             Divider()
                             Button("Delete", role: .destructive) { deletePlaylist(playlist.id) }
                         }
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
                 Button { createPlaylist() } label: {
                     Image(systemName: "plus")
@@ -639,6 +640,8 @@ struct PlayerWindow: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
+            // Animate pills sliding in/out as playlists are created or deleted.
+            .animation(.easeInOut(duration: 0.22), value: controller.playlists.playlists.count)
         }
     }
 
@@ -655,6 +658,8 @@ struct PlayerWindow: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
+        // Animate only the highlight color, not a layout morph — keeps switching crisp.
+        .animation(.easeInOut(duration: 0.18), value: selected)
     }
 
     /// Header shown in place of the LIBRARY header while viewing a playlist.
@@ -672,8 +677,8 @@ struct PlayerWindow: View {
                         if !focused { commitRename() }   // commit when clicked away
                     }
             } else {
-                Text(playlist.name.uppercased())
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                Text(playlist.name)
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(accent.opacity(0.9))
                     .lineLimit(1)
                 Text("\(playlist.trackPaths.count)")
@@ -714,10 +719,11 @@ struct PlayerWindow: View {
 
     private func selectSource(_ id: Playlist.ID?) {
         if renamingPlaylist && id != renameTargetID { cancelRename() }
-        withAnimation(.easeInOut(duration: 0.15)) {
-            selectedPlaylistID = id
-            if id != nil { searchActive = false; searchText = "" }
-        }
+        // Switch instantly: animating a full header swap (LIBRARY ↔ playlist)
+        // interpolates two different layouts and stutters. The pill highlight
+        // animates on its own; the list content just swaps cleanly.
+        selectedPlaylistID = id
+        if id != nil { searchActive = false; searchText = "" }
     }
 
     /// Create a playlist, optionally seed it with `track`. When `select` is true
@@ -736,7 +742,9 @@ struct PlayerWindow: View {
         renameTargetID = id
         renameText = current
         renamingPlaylist = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { renameFieldFocused = true }
+        // Focus on the next runloop tick — just late enough for the field to be
+        // in the hierarchy, without the visible pause a timed delay adds.
+        DispatchQueue.main.async { renameFieldFocused = true }
     }
 
     private func commitRename() {
