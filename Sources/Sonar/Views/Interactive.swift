@@ -116,6 +116,15 @@ struct LibrarySection: Identifiable {
     let tracks: [Track]
 }
 
+/// One entry in a row's "Add to Playlist ▸" submenu. `contains` marks playlists
+/// the track is already in (shown with a checkmark); `add` performs the insert.
+struct PlaylistMenuItem: Identifiable {
+    let id: UUID
+    let name: String
+    let contains: Bool
+    let add: () -> Void
+}
+
 /// A 6-dot drag handle (2 columns × 3 rows), the affordance for reordering.
 struct DragDots: View {
     var body: some View {
@@ -151,6 +160,13 @@ struct TrackRowView: View {
     var isDragging: Bool = false
     var onReorderChanged: (CGFloat) -> Void = { _ in }
     var onReorderEnded: () -> Void = {}
+    /// "Add to Playlist ▸" submenu contents. Empty = the submenu is hidden.
+    var addToPlaylists: [PlaylistMenuItem] = []
+    /// "New Playlist…" action inside the add-to submenu; nil hides it.
+    var onNewPlaylistWithTrack: (() -> Void)? = nil
+    /// "Remove from Playlist" action — shown only when set (row is inside a
+    /// playlist, not the main library).
+    var onRemoveFromPlaylist: (() -> Void)? = nil
     private let accent = Theme.accent
 
     @State private var hovering = false
@@ -227,7 +243,27 @@ struct TrackRowView: View {
             if queueHasItems {
                 Button("Add to Queue", action: onAddToQueue)
             }
+            if !addToPlaylists.isEmpty || onNewPlaylistWithTrack != nil {
+                Menu("Add to Playlist") {
+                    ForEach(addToPlaylists) { item in
+                        Button(action: item.add) {
+                            if item.contains {
+                                Label(item.name, systemImage: "checkmark")
+                            } else {
+                                Text(item.name)
+                            }
+                        }
+                    }
+                    if let onNewPlaylistWithTrack {
+                        if !addToPlaylists.isEmpty { Divider() }
+                        Button("New Playlist…", action: onNewPlaylistWithTrack)
+                    }
+                }
+            }
             Divider()
+            if let onRemoveFromPlaylist {
+                Button("Remove from Playlist", role: .destructive, action: onRemoveFromPlaylist)
+            }
             Button("Delete", role: .destructive, action: onDelete)
         }
         .animation(.easeOut(duration: 0.12), value: hovering)

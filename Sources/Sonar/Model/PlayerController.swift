@@ -25,6 +25,7 @@ enum SleepMode: Equatable {
 final class PlayerController: ObservableObject {
     let engine = AudioEngine()
     let library = MusicLibrary()
+    let playlists = PlaylistStore()
     let downloader = Downloader()
     private let nowPlaying = NowPlayingController()
 
@@ -65,7 +66,8 @@ final class PlayerController: ObservableObject {
         nowPlaying.onPrevious = { [weak self] in self?.previous() }
 
         // Re-publish child changes so the view updates.
-        for child in [engine.objectWillChange, library.objectWillChange, downloader.objectWillChange] {
+        for child in [engine.objectWillChange, library.objectWillChange,
+                      playlists.objectWillChange, downloader.objectWillChange] {
             child.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         }
 
@@ -223,6 +225,31 @@ final class PlayerController: ObservableObject {
     }
 
     func clearQueue() { queue.removeAll() }
+
+    // MARK: Playlists
+
+    /// Resolve a playlist's stored paths to real library tracks, in playlist
+    /// order, skipping any file that's no longer in the library.
+    func tracks(in playlist: Playlist) -> [Track] {
+        let byPath = Dictionary(library.tracks.map { ($0.url.path, $0) },
+                                uniquingKeysWith: { first, _ in first })
+        return playlist.trackPaths.compactMap { byPath[$0] }
+    }
+
+    /// Play a playlist from its first track, as the new scope.
+    func playPlaylist(_ playlist: Playlist) {
+        playGroup(tracks(in: playlist))
+    }
+
+    /// Snapshot the current queue into a new playlist. Returns nil if the queue
+    /// is empty (nothing to save).
+    @discardableResult
+    func saveQueueAsPlaylist() -> Playlist? {
+        guard !queue.isEmpty else { return nil }
+        let playlist = playlists.create()
+        for item in queue { playlists.add(path: item.track.url.path, to: playlist.id) }
+        return playlist
+    }
 
     private func randomTrack(in list: [Track], excluding index: Int) -> Track {
         guard list.count > 1 else { return list[index] }

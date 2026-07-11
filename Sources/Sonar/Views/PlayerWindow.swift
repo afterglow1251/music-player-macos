@@ -20,6 +20,11 @@ struct PlayerWindow: View {
     // Grouping (auto by artist for now).
     @State private var groupByArtist = false
     @State private var collapsedGroups: Set<String> = []
+    // Source switcher: nil = the whole library, otherwise the viewed playlist.
+    @State private var selectedPlaylistID: Playlist.ID?
+    @State private var renamingPlaylist = false
+    @State private var renameText = ""
+    @State private var renameTargetID: Playlist.ID?
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var searchActive = false
@@ -30,6 +35,7 @@ struct PlayerWindow: View {
     @State private var artworkImage: NSImage?
     @FocusState private var urlFieldFocused: Bool
     @FocusState private var searchFieldFocused: Bool
+    @FocusState private var renameFieldFocused: Bool
 
     /// Accent — the signature green, used sparingly.
     private let accent = Theme.accent
@@ -509,7 +515,8 @@ struct PlayerWindow: View {
 
     private func libraryCard(list: some View, plain: Bool = false) -> some View {
         VStack(spacing: 0) {
-            libraryHeader
+            if let playlist = selectedPlaylist { playlistHeader(playlist) } else { libraryHeader }
+            if !searchActive { sourceBar }
             Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6)
             list
         }
@@ -586,6 +593,182 @@ struct PlayerWindow: View {
         .padding(.top, 8).padding(.bottom, 4)
     }
 
+    // MARK: Source switcher (Library + playlists)
+
+    /// Currently viewed playlist, or nil while the whole library is shown. Falls
+    /// back to nil if the selected playlist was deleted.
+    private var selectedPlaylist: Playlist? {
+        guard let id = selectedPlaylistID else { return nil }
+        return controller.playlists.playlists.first { $0.id == id }
+    }
+
+    /// The selected playlist's tracks resolved against the library (order kept,
+    /// missing files dropped).
+    private var playlistTracks: [Track] {
+        guard let playlist = selectedPlaylist else { return [] }
+        return controller.tracks(in: playlist)
+    }
+
+    /// Pills that switch the track list between the library and each playlist,
+    /// plus a "＋" to make a new one.
+    private var sourceBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                sourcePill(title: "Library", systemImage: "music.note",
+                           selected: selectedPlaylistID == nil) { selectSource(nil) }
+                ForEach(controller.playlists.playlists) { playlist in
+                    sourcePill(title: playlist.name, systemImage: "music.note.list",
+                               selected: selectedPlaylistID == playlist.id) { selectSource(playlist.id) }
+                        .contextMenu {
+                            Button("Play") { controller.playPlaylist(playlist) }
+                            Button("Rename") { beginRename(id: playlist.id, current: playlist.name) }
+                            Divider()
+                            Button("Delete", role: .destructive) { deletePlaylist(playlist.id) }
+                        }
+                }
+                Button { createPlaylist() } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 22, height: 20)
+                        .background(Capsule().fill(Color.white.opacity(0.08)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(PressableButtonStyle(hoverScale: 1.08))
+                .tooltip("New playlist")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func sourcePill(title: String, systemImage: String, selected: Bool,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage).font(.system(size: 9))
+                Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1)
+            }
+            .foregroundStyle(selected ? .black : .white.opacity(0.7))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(selected ? accent.opacity(0.9) : Color.white.opacity(0.08)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
+    }
+
+    /// Header shown in place of the LIBRARY header while viewing a playlist.
+    private func playlistHeader(_ playlist: Playlist) -> some View {
+        HStack(spacing: 8) {
+            if renamingPlaylist && renameTargetID == playlist.id {
+                SteadyTextField(placeholder: "Playlist name", text: $renameText,
+                                font: .system(size: 11, weight: .semibold),
+                                textColor: .white,
+                                onSubmit: { commitRename() },
+                                focus: $renameFieldFocused)
+                    .frame(maxWidth: 180)
+                    .onExitCommand { cancelRename() }
+                    .onChange(of: renameFieldFocused) { _, focused in
+                        if !focused { commitRename() }   // commit when clicked away
+                    }
+            } else {
+                Text(playlist.name.uppercased())
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent.opacity(0.9))
+                    .lineLimit(1)
+                Text("\(playlist.trackPaths.count)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+            Spacer()
+            if !playlistTracks.isEmpty {
+                Button { controller.playPlaylist(playlist) } label: {
+                    Image(systemName: "play.fill").font(.system(size: 11))
+                        .foregroundStyle(accent)
+                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(PressableButtonStyle())
+                .tooltip("Play")
+            }
+            Button { beginRename(id: playlist.id, current: playlist.name) } label: {
+                Image(systemName: "pencil").font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle())
+            .tooltip("Rename")
+            Button { deletePlaylist(playlist.id) } label: {
+                Image(systemName: "trash").font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle())
+            .tooltip("Delete playlist")
+        }
+        .frame(height: 24)
+        .padding(.horizontal, 10)
+        .padding(.top, 8).padding(.bottom, 4)
+    }
+
+    // MARK: Source actions
+
+    private func selectSource(_ id: Playlist.ID?) {
+        if renamingPlaylist && id != renameTargetID { cancelRename() }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            selectedPlaylistID = id
+            if id != nil { searchActive = false; searchText = "" }
+        }
+    }
+
+    /// Create a playlist, optionally seed it with `track`. When `select` is true
+    /// (the ＋ button / Save-queue), switch to it and start inline-naming it right
+    /// away; when false (library's "New Playlist…"), create it quietly with its
+    /// default name and stay put.
+    private func createPlaylist(addingTrack track: Track? = nil, select: Bool = true) {
+        let playlist = controller.playlists.create()
+        if let track { _ = controller.playlists.add(path: track.url.path, to: playlist.id) }
+        if select { beginRename(id: playlist.id, current: playlist.name) }
+    }
+
+    /// Switch to a playlist and turn its header name into a focused text field.
+    private func beginRename(id: Playlist.ID, current: String) {
+        selectSource(id)
+        renameTargetID = id
+        renameText = current
+        renamingPlaylist = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { renameFieldFocused = true }
+    }
+
+    private func commitRename() {
+        guard renamingPlaylist else { return }
+        if let id = renameTargetID { controller.playlists.rename(id, to: renameText) }
+        cancelRename()
+    }
+
+    private func cancelRename() {
+        renamingPlaylist = false
+        renameTargetID = nil
+        renameFieldFocused = false
+    }
+
+    private func deletePlaylist(_ id: Playlist.ID) {
+        if selectedPlaylistID == id { selectSource(nil) }
+        controller.playlists.delete(id)
+    }
+
+    /// Add-to-playlist submenu entries for a library row.
+    private func playlistMenuItems(for track: Track) -> [PlaylistMenuItem] {
+        let path = track.url.path
+        return controller.playlists.playlists.map { playlist in
+            PlaylistMenuItem(id: playlist.id, name: playlist.name,
+                             contains: playlist.trackPaths.contains(path)) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    _ = controller.playlists.add(path: path, to: playlist.id)
+                }
+            }
+        }
+    }
+
     /// Compact "UP NEXT" header shown at the top of the track list when queued.
     private var queueHeader: some View {
         HStack(spacing: 8) {
@@ -596,6 +779,18 @@ struct PlayerWindow: View {
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.3))
             Spacer()
+            Button {
+                if let playlist = controller.saveQueueAsPlaylist() {
+                    beginRename(id: playlist.id, current: playlist.name)
+                }
+            } label: {
+                Text("Save")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(accent.opacity(0.85))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
+            .help("Save the queue as a playlist")
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { controller.clearQueue() }
             } label: {
@@ -637,24 +832,33 @@ struct PlayerWindow: View {
                         .padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 2)
                 }
 
-                if controller.library.tracks.isEmpty {
+                if let playlist = selectedPlaylist {
+                    if playlistTracks.isEmpty {
+                        emptyMessage("This playlist is empty — right-click a library track to add it")
+                    }
+                    ForEach(playlistTracks) { track in
+                        playlistRow(track, in: playlist)
+                    }
+                } else if controller.library.tracks.isEmpty {
                     emptyMessage("Your library is empty — paste a URL or open a file")
-                } else if filteredTracks.isEmpty {
-                    emptyMessage("No tracks match “\(searchText)”")
-                }
-                if groupByArtist && searchText.isEmpty {
-                    // Collapsible auto-group sections, each playable as its own scope.
-                    ForEach(artistSections) { section in
-                        groupHeader(section)
-                        if !collapsedGroups.contains(section.id) {
-                            ForEach(section.tracks) { track in
-                                libraryRow(track, reorderID: nil, scope: section.tracks)
+                } else {
+                    if filteredTracks.isEmpty {
+                        emptyMessage("No tracks match “\(searchText)”")
+                    }
+                    if groupByArtist && searchText.isEmpty {
+                        // Collapsible auto-group sections, each playable as its own scope.
+                        ForEach(artistSections) { section in
+                            groupHeader(section)
+                            if !collapsedGroups.contains(section.id) {
+                                ForEach(section.tracks) { track in
+                                    libraryRow(track, reorderID: nil, scope: section.tracks)
+                                }
                             }
                         }
-                    }
-                } else {
-                    ForEach(filteredTracks) { track in
-                        libraryRow(track, reorderID: searchText.isEmpty ? track.url.path : nil)
+                    } else {
+                        ForEach(filteredTracks) { track in
+                            libraryRow(track, reorderID: searchText.isEmpty ? track.url.path : nil)
+                        }
                     }
                 }
             }
@@ -687,11 +891,45 @@ struct PlayerWindow: View {
             onReorderEnded: {
                 controller.library.commitOrder()
                 withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
-            }
+            },
+            addToPlaylists: playlistMenuItems(for: track),
+            onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) }
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
                                       cursorY: dragCursorY, frames: rowFrames,
                                       enabled: reorderID != nil))
+    }
+
+    /// One row inside a playlist. Plays through the playlist as its scope,
+    /// reorders within the playlist, and offers "Remove from Playlist".
+    private func playlistRow(_ track: Track, in playlist: Playlist) -> some View {
+        let path = track.url.path
+        let scope = playlistTracks
+        return TrackRowView(
+            track: track,
+            isCurrent: controller.currentTrack == track,
+            isPlaying: engine.isPlaying,
+            durationText: timeString(track.duration),
+            onTap: { controller.play(track, in: scope) },
+            onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
+            onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
+            onDelete: { controller.delete(track) },
+            queueHasItems: !controller.queue.isEmpty,
+            reorderID: path,
+            isDragging: draggingID == path,
+            onReorderChanged: { y in handlePlaylistReorder(path: path, in: playlist, cursorY: y) },
+            onReorderEnded: {
+                controller.playlists.commit(playlist.id)
+                withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
+            },
+            onRemoveFromPlaylist: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    controller.playlists.remove(path: path, from: playlist.id)
+                }
+            }
+        )
+        .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
+                                      cursorY: dragCursorY, frames: rowFrames))
     }
 
     // MARK: Auto-groups (by artist)
@@ -744,6 +982,19 @@ struct PlayerWindow: View {
         let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
         if controller.library.tracks.firstIndex(where: { $0.url.path == path }) != target {
             withAnimation(.easeInOut(duration: 0.18)) { controller.library.reorder(path: path, toIndex: target) }
+        }
+    }
+
+    /// Reorder within a playlist live from the cursor's y position.
+    private func handlePlaylistReorder(path: String, in playlist: Playlist, cursorY: CGFloat) {
+        if draggingID != path { draggingID = path }
+        dragCursorY = cursorY
+        let others = playlistTracks.filter { $0.url.path != path }
+        let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
+        if selectedPlaylist?.trackPaths.firstIndex(of: path) != target {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                controller.playlists.reorder(path: path, toIndex: target, in: playlist.id)
+            }
         }
     }
 
