@@ -9,38 +9,49 @@ struct LyricLine: Identifiable, Hashable {
 
 /// Where a track's synced lyrics come from, and how they're parsed.
 ///
-/// Lookup order: a sibling `.lrc` file next to the audio (so downloaded/edited
-/// lyrics win and work offline), then LRCLIB — a free, keyless community lyrics
-/// API matched on artist + title + **duration** (so the timestamps line up with
-/// our exact copy). A hit from the network is cached to the sibling `.lrc`.
+/// Lookup order: a cached `.lrc` in the hidden `.sonar/` folder beside the audio
+/// (so downloaded lyrics work offline), then LRCLIB — a free, keyless community
+/// lyrics API matched on artist + title + **duration** (so the timestamps line up
+/// with our exact copy). A hit from the network is cached back to `.sonar/`.
 enum LyricsProvider {
 
     /// Fetch synced lyrics for a track, or nil if none are available.
     static func fetch(for track: Track) async -> [LyricLine]? {
-        if let local = loadSibling(for: track.url) {
+        if let local = loadCache(for: track.url) {
             return local
         }
         guard let lines = await fetchFromLRCLIB(track) else { return nil }
-        cacheSibling(lines.raw, for: track.url)
+        writeCache(lines.raw, for: track.url)
         return lines.parsed
     }
 
-    // MARK: Sibling .lrc file
+    // MARK: On-disk cache (hidden `.sonar/` folder beside the audio)
 
-    private static func siblingURL(for audio: URL) -> URL {
-        audio.deletingPathExtension().appendingPathExtension("lrc")
+    /// The cache file for a track: `<audio dir>/.sonar/<audio filename>.lrc`.
+    /// A hidden per-folder subdirectory keeps the music folder itself clean while
+    /// the cache still travels with the library and works offline. Keying on the
+    /// full filename (extension included) avoids collisions between same-named
+    /// tracks of different formats.
+    private static func cacheURL(for audio: URL) -> URL {
+        audio.deletingLastPathComponent()
+            .appendingPathComponent(".sonar", isDirectory: true)
+            .appendingPathComponent(audio.lastPathComponent)
+            .appendingPathExtension("lrc")
     }
 
-    private static func loadSibling(for audio: URL) -> [LyricLine]? {
-        let url = siblingURL(for: audio)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+    private static func loadCache(for audio: URL) -> [LyricLine]? {
+        guard let text = try? String(contentsOf: cacheURL(for: audio), encoding: .utf8)
+        else { return nil }
         let lines = parse(text)
         return lines.isEmpty ? nil : lines
     }
 
-    private static func cacheSibling(_ raw: String, for audio: URL) {
+    private static func writeCache(_ raw: String, for audio: URL) {
         guard !raw.isEmpty else { return }
-        try? raw.write(to: siblingURL(for: audio), atomically: true, encoding: .utf8)
+        let url = cacheURL(for: audio)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                  withIntermediateDirectories: true)
+        try? raw.write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: LRCLIB
