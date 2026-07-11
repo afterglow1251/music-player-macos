@@ -157,6 +157,8 @@ final class MusicLibrary: ObservableObject {
     /// Order a freshly-scanned list by the active browse `view`.
     private func arranged(_ list: [Track]) -> [Track] {
         switch view {
+        case .manual:
+            return manuallyOrdered(list)
         case .recent:
             return list.sorted { ($0.dateAdded ?? .distantPast) > ($1.dateAdded ?? .distantPast) }
         case .alphabetical:
@@ -165,6 +167,37 @@ final class MusicLibrary: ObservableObject {
             return list.sorted(by: artistTrackOrder)
         }
     }
+
+    /// Reconcile a list with the saved manual order: known files keep their saved
+    /// position, new files sort in alphabetically at the end, and it's re-persisted.
+    private func manuallyOrdered(_ list: [Track]) -> [Track] {
+        let position = Dictionary(prefs.libraryOrder.enumerated().map { ($1, $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        let sorted = list.sorted { a, b in
+            switch (position[a.url.path], position[b.url.path]) {
+            case let (x?, y?): return x < y
+            case (_?, nil): return true                    // known before new files
+            case (nil, _?): return false
+            case (nil, nil):
+                return a.displayTitle.localizedCaseInsensitiveCompare(b.displayTitle) == .orderedAscending
+            }
+        }
+        prefs.libraryOrder = sorted.map(\.url.path)
+        return sorted
+    }
+
+    /// Live reorder while a drag is in progress — moves the track with `path` to
+    /// `index`. Mutates the in-memory order only; `commitOrder()` persists on drop.
+    func reorder(path: String, toIndex index: Int) {
+        guard let from = tracks.firstIndex(where: { $0.url.path == path }) else { return }
+        var updated = tracks
+        let item = updated.remove(at: from)
+        updated.insert(item, at: min(max(index, 0), updated.count))
+        if updated.map(\.url.path) != tracks.map(\.url.path) { tracks = updated }
+    }
+
+    /// Persist the current order once a drag finishes.
+    func commitOrder() { prefs.libraryOrder = tracks.map(\.url.path) }
 
     /// Order tracks by artist → track number → title, so one artist's tracks read
     /// in a sensible order. Untagged fields sort last within their level.

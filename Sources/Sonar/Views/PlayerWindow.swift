@@ -898,10 +898,11 @@ struct PlayerWindow: View {
                             }
                         }
                     } else {
-                        // Flat list (Recent / A–Z, or while searching); artist shown
-                        // under each title.
+                        // Flat list (Manual / Recent / A–Z, or while searching).
+                        // Drag-to-reorder only in the hand-arranged Manual view.
+                        let canReorder = searchText.isEmpty && controller.library.view == .manual
                         ForEach(filteredTracks) { track in
-                            libraryRow(track)
+                            libraryRow(track, reorderID: canReorder ? track.url.path : nil)
                         }
                     }
                 }
@@ -915,11 +916,11 @@ struct PlayerWindow: View {
         .scrollIndicators(.hidden)
     }
 
-    /// One library row. The library is always shown in a sorted browse order, so
-    /// there's no drag-to-reorder here — custom order lives in playlists/the queue.
+    /// One library row. `reorderID` non-nil enables drag (Manual view only).
     /// `showArtist` is off inside a named artist section (the header already names it).
-    private func libraryRow(_ track: Track, showArtist: Bool = true) -> some View {
-        TrackRowView(
+    private func libraryRow(_ track: Track, showArtist: Bool = true, reorderID: String? = nil) -> some View {
+        let path = track.url.path
+        return TrackRowView(
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
@@ -930,9 +931,19 @@ struct PlayerWindow: View {
             onDelete: { controller.delete(track) },
             showArtist: showArtist,
             queueHasItems: !controller.queue.isEmpty,
+            reorderID: reorderID,
+            isDragging: draggingID == path,
+            onReorderChanged: { y in handleLibraryReorder(path: path, cursorY: y) },
+            onReorderEnded: {
+                controller.library.commitOrder()
+                withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
+            },
             addToPlaylists: playlistMenuItems(for: track),
             onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) }
         )
+        .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
+                                      cursorY: dragCursorY, frames: rowFrames,
+                                      enabled: reorderID != nil))
     }
 
     /// One row inside a playlist. Plays through the playlist as its scope,
@@ -1050,9 +1061,9 @@ struct PlayerWindow: View {
                 .foregroundStyle(.white.opacity(0.3))
             Spacer()
             Button { controller.playGroup(section.tracks) } label: {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 15))
-                    .foregroundStyle(accent.opacity(0.9))
+                Image(systemName: "play.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(accent)
                     .frame(width: 22, height: 22).contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
@@ -1070,6 +1081,18 @@ struct PlayerWindow: View {
         // Sit above the sibling rows so the play button's tooltip isn't covered by
         // the tracks drawn after it.
         .zIndex(1)
+    }
+
+    /// Reorder the library live from the cursor's y position — pure math, so the
+    /// insertion never lags behind the finger. (Manual view only.)
+    private func handleLibraryReorder(path: String, cursorY: CGFloat) {
+        if draggingID != path { draggingID = path }
+        dragCursorY = cursorY
+        let others = filteredTracks.filter { $0.url.path != path }
+        let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
+        if controller.library.tracks.firstIndex(where: { $0.url.path == path }) != target {
+            withAnimation(.easeInOut(duration: 0.18)) { controller.library.reorder(path: path, toIndex: target) }
+        }
     }
 
     /// Reorder within a playlist live from the cursor's y position.

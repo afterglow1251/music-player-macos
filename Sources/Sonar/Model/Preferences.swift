@@ -1,14 +1,16 @@
 import Foundation
 
-/// How the library is presented. Three genuinely useful browse orders — custom
-/// collections/order are what playlists are for, so there's no manual mode here.
+/// How the library is presented: a hand-arranged manual order, or one of three
+/// browse orders.
 enum LibraryView: String, CaseIterable {
+    case manual       // hand-arranged, drag to reorder
     case recent       // newest additions first
     case alphabetical // by title, A–Z
-    case artist       // by artist, A–Z (artist shown under each title)
+    case artist       // by artist, A–Z, grouped
 
     var label: String {
         switch self {
+        case .manual:       return "Manual"
         case .recent:       return "Recent"
         case .alphabetical: return "A–Z"
         case .artist:       return "Artist"
@@ -17,6 +19,7 @@ enum LibraryView: String, CaseIterable {
 
     var symbol: String {
         switch self {
+        case .manual:       return "arrow.up.arrow.down"
         case .recent:       return "clock"
         case .alphabetical: return "textformat"
         case .artist:       return "person"
@@ -35,12 +38,19 @@ final class Preferences {
     private enum Key: String {
         case volume, eqGains, eqEnabled, shuffle, repeatMode
         case themeName, lastTrack, lastPosition, musicFolderBookmark
-        case librarySort, playlists
+        case libraryOrder, librarySort, playlists
     }
 
-    /// The library browse order — defaults to grouping-free A–Z by artist.
+    /// Manual library order — file paths in the order the user arranged them.
+    /// New files not in this list are appended; missing ones are dropped on scan.
+    var libraryOrder: [String] {
+        get { defaults.array(forKey: Key.libraryOrder.rawValue) as? [String] ?? [] }
+        set { defaults.set(newValue, forKey: Key.libraryOrder.rawValue) }
+    }
+
+    /// The library view — defaults to the hand-arranged manual order.
     var libraryView: LibraryView {
-        get { defaults.string(forKey: Key.librarySort.rawValue).flatMap(LibraryView.init) ?? .artist }
+        get { defaults.string(forKey: Key.librarySort.rawValue).flatMap(LibraryView.init) ?? .manual }
         set { defaults.set(newValue.rawValue, forKey: Key.librarySort.rawValue) }
     }
 
