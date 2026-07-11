@@ -127,7 +127,7 @@ private struct MiniPlayerView: View {
                     .padding(6)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DimPressStyle())
             .help("Show Sonar")
             .padding(6)
         }
@@ -232,12 +232,23 @@ private struct MiniPlayerView: View {
                 .frame(width: 30, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DimPressStyle())
     }
 
     private static func time(_ seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
         let total = Int(seconds)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// Native-feeling press feedback: the control dims (and dips a touch) while held,
+/// the way AppKit buttons do — `.buttonStyle(.plain)` gives no press state at all.
+private struct DimPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.45 : 1)
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
     }
 }
