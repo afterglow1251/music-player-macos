@@ -26,6 +26,7 @@ struct PlayerWindow: View {
     @State private var renameText = ""
     @State private var renameTargetID: Playlist.ID?
     @State private var showSettings = false
+    @State private var showLyrics = false
     @State private var searchText = ""
     @State private var searchActive = false
     @State private var searchResults: [Track] = []   // filled off-main by the debounced search task
@@ -473,6 +474,9 @@ struct PlayerWindow: View {
             if showSettings {
                 SettingsView(controller: controller, width: width, height: height)
                     .transition(.opacity)
+            } else if showLyrics {
+                LyricsView(controller: controller, width: width, height: height)
+                    .transition(.opacity)
             } else {
                 heroArtView(width: width, height: height)
             }
@@ -483,6 +487,7 @@ struct PlayerWindow: View {
                     sleepBadge("track end")
                 }
                 Spacer()
+                lyricsToggle
                 settingsToggle
             }
             .padding(10)
@@ -491,9 +496,30 @@ struct PlayerWindow: View {
         .frame(width: width, height: height)
     }
 
+    private var lyricsToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                showLyrics.toggle()
+                if showLyrics { showSettings = false }
+            }
+        } label: {
+            Image(systemName: "quote.bubble")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(showLyrics ? accent : .white.opacity(0.9))
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(.black.opacity(0.35)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .tooltip("Lyrics")
+    }
+
     private var settingsToggle: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
+            withAnimation(.easeInOut(duration: 0.22)) {
+                showSettings.toggle()
+                if showSettings { showLyrics = false }
+            }
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 14, weight: .semibold))

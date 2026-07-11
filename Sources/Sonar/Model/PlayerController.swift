@@ -31,9 +31,12 @@ final class PlayerController: ObservableObject {
     let library = MusicLibrary()
     let playlists = PlaylistStore()
     let downloader = Downloader()
+    let lyrics = LyricsController()
     private let nowPlaying = NowPlayingController()
 
-    @Published private(set) var currentTrack: Track?
+    @Published private(set) var currentTrack: Track? {
+        didSet { if currentTrack?.url != oldValue?.url { lyrics.load(for: currentTrack) } }
+    }
     @Published var urlInput: String = ""
 
     /// Tracks the user lined up to play next, overriding the normal library order.
@@ -76,7 +79,8 @@ final class PlayerController: ObservableObject {
 
         // Re-publish child changes so the view updates.
         for child in [engine.objectWillChange, library.objectWillChange,
-                      playlists.objectWillChange, downloader.objectWillChange] {
+                      playlists.objectWillChange, downloader.objectWillChange,
+                      lyrics.objectWillChange] {
             child.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         }
 
