@@ -29,6 +29,7 @@ struct PlayerWindow: View {
     @State private var searchText = ""
     @State private var searchActive = false
     @State private var urlChips: [String] = []   // links queued via the ＋ button
+    @State private var shakingChipURL: String?   // chip to shake when a dupe is re-added
     @State private var isDropTargeted = false
     /// Decoded once per track (not per frame) so the breathing animation doesn't
     /// re-decode the artwork 30×/sec.
@@ -103,7 +104,7 @@ struct PlayerWindow: View {
                 .contentShape(Rectangle())
                 .onTapGesture { dismissFocus() }
         )
-        .overlay(alignment: .bottom) { errorToast }
+        .overlay(alignment: .bottom) { bottomToasts }
         // Drag & drop audio files or a YouTube link onto the window.
         // Files & URLs only (not plain text) so an internal reorder drag doesn't
         // trigger the window's drop highlight.
@@ -193,7 +194,7 @@ struct PlayerWindow: View {
         // Files & URLs only (not plain text) so an internal reorder drag doesn't
         // trigger the window's drop highlight.
         .onDrop(of: [.fileURL, .url], isTargeted: $isDropTargeted) { handleDrop($0) }
-        .overlay(alignment: .bottom) { errorToast }
+        .overlay(alignment: .bottom) { bottomToasts }
         // Esc: if a field/search is active, just dismiss it — only leave fullscreen
         // when nothing is focused (otherwise pressing Esc to clear a field would
         // unexpectedly collapse the window).
@@ -1044,6 +1045,34 @@ struct PlayerWindow: View {
         }
     }
 
+    /// A neutral, accent-coloured info toast (e.g. "Already in library") — the
+    /// non-error sibling of `errorToast`.
+    @ViewBuilder private var noticeToast: some View {
+        if let notice = controller.downloader.notice {
+            Text(notice)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.black)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Capsule().fill(accent.opacity(0.9)))
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .task(id: notice) {
+                    try? await Task.sleep(for: .seconds(2.5))
+                    controller.downloader.notice = nil
+                }
+        }
+    }
+
+    /// Both transient toasts, stacked at the bottom of the window.
+    @ViewBuilder private var bottomToasts: some View {
+        VStack(spacing: 8) {
+            noticeToast
+            errorToast
+        }
+        .animation(.easeInOut(duration: 0.25), value: controller.downloader.notice)
+        .animation(.easeInOut(duration: 0.25), value: controller.downloader.lastError)
+    }
+
     // MARK: Download bar (YouTube URL → mp3)
 
     private var downloadBar: some View {
@@ -1162,7 +1191,7 @@ struct PlayerWindow: View {
             HStack(spacing: 6) {
                 // Staged: typed via ＋, not yet submitted — always removable.
                 ForEach(Array(urlChips.enumerated()), id: \.offset) { index, url in
-                    urlChip(label: shortURL(url), active: false) {
+                    urlChip(label: shortURL(url), active: false, shaking: shakingChipURL == url) {
                         urlChips = urlChips.enumerated().filter { $0.offset != index }.map(\.element)
                     }
                 }
@@ -1171,7 +1200,7 @@ struct PlayerWindow: View {
                 // use the cancel-all button next to the field for that.
                 ForEach(controller.downloadQueue) { item in
                     let isActive = item.id == controller.currentDownloadID
-                    urlChip(label: shortURL(item.url), active: isActive) {
+                    urlChip(label: shortURL(item.url), active: isActive, shaking: shakingChipURL == item.url) {
                         controller.removeFromQueue(item.id)
                     }
                 }
@@ -1183,7 +1212,8 @@ struct PlayerWindow: View {
 
     /// One chip. `active` chips (currently downloading) show a spinner instead
     /// of the link icon and drop their remove button.
-    private func urlChip(label: String, active: Bool, onRemove: @escaping () -> Void) -> some View {
+    private func urlChip(label: String, active: Bool, shaking: Bool = false,
+                         onRemove: @escaping () -> Void) -> some View {
         HStack(spacing: 5) {
             if active {
                 ProgressView().controlSize(.mini).scaleEffect(0.55).frame(width: 8, height: 8)
@@ -1205,8 +1235,11 @@ struct PlayerWindow: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(Capsule().fill(accent.opacity(0.14) as Color))
-        .overlay(Capsule().stroke(accent.opacity(0.25) as Color))
+        // Flash a stronger accent while shaking, so the eye lands on the dupe.
+        .background(Capsule().fill(accent.opacity(shaking ? 0.30 : 0.14)))
+        .overlay(Capsule().stroke(accent.opacity(shaking ? 0.7 : 0.25)))
+        .modifier(Shake(animatableData: shaking ? 1 : 0))
+        .animation(.linear(duration: 0.4), value: shaking)
         // Fade in (no centre-anchored scale, which made the capsule pop and the
         // label appear to slide into place); keep the tidy scale-out on removal.
         .transition(.asymmetric(insertion: .opacity,
@@ -1233,8 +1266,15 @@ struct PlayerWindow: View {
             if head.isEmpty { controller.urlInput = tail; continue }  // stray/leading space
             // Stop at the first non-URL token so we never eat plain text.
             guard head.contains("http") else { break }
+            if controller.isAlreadyDownloaded(head) {   // instant, no yt-dlp
+                controller.downloader.notice = "Already in library"
+                controller.urlInput = tail
+                continue
+            }
             if !taken().contains(head) {
                 withAnimation(.easeInOut(duration: 0.2)) { urlChips.append(head) }
+            } else {
+                flagDuplicate(head)   // already staged/queued — shake it, don't silently drop
             }
             controller.urlInput = tail
         }
@@ -1245,8 +1285,15 @@ struct PlayerWindow: View {
     private func addURLChip() {
         let url = controller.urlInput.trimmingCharacters(in: .whitespaces)
         guard url.contains("http") else { return }
+        if controller.isAlreadyDownloaded(url) {         // instant, no yt-dlp
+            controller.downloader.notice = "Already in library"
+            controller.urlInput = ""
+            urlFieldFocused = true
+            return
+        }
         let taken = Set(urlChips).union(controller.downloadQueue.map(\.url))
         guard !taken.contains(url) else {
+            flagDuplicate(url)          // it's already staged/queued — shake that chip
             controller.urlInput = ""
             urlFieldFocused = true
             return
@@ -1254,6 +1301,19 @@ struct PlayerWindow: View {
         withAnimation(.easeInOut(duration: 0.2)) { urlChips.append(url) }
         controller.urlInput = ""
         urlFieldFocused = true
+    }
+
+    /// Shake the existing chip for `url` so re-adding a duplicate reads as a
+    /// deliberate "already here" instead of nothing happening. Reset to nil first
+    /// so the false→true transition re-fires even on a rapid repeat.
+    private func flagDuplicate(_ url: String) {
+        shakingChipURL = nil                       // re-arm so a rapid repeat re-fires
+        DispatchQueue.main.async {
+            shakingChipURL = url                   // the chip animates the shake off this
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+                if shakingChipURL == url { shakingChipURL = nil }
+            }
+        }
     }
 
     /// Enqueue every chip plus whatever is in the field.

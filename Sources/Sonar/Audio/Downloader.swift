@@ -20,6 +20,8 @@ final class Downloader: ObservableObject {
     @Published var status: String = ""
     /// Set on a failure so the UI can show a transient error toast.
     @Published var lastError: String?
+    /// Set for a transient, non-error info toast (e.g. "Already in library").
+    @Published var notice: String?
 
     private let ytDlpPath: String?
     private let toolsDir: String

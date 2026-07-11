@@ -35,6 +35,24 @@ struct Track: Identifiable, Hashable, Sendable {
 
     static func == (lhs: Track, rhs: Track) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    /// Best-effort YouTube video id straight from a URL string — no network, no
+    /// yt-dlp — so a paste can be deduped against the library instantly. Returns
+    /// nil for shapes we can't confidently parse (those fall back to yt-dlp).
+    static func youtubeID(from urlString: String) -> String? {
+        let string = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Any URL carrying a `v=ID` query item (watch?v=…, plus &list=/&t=).
+        if let comps = URLComponents(string: string),
+           let v = comps.queryItems?.first(where: { $0.name == "v" })?.value,
+           v.wholeMatch(of: /[A-Za-z0-9_-]{11}/) != nil {
+            return v
+        }
+        // Short / embed / shorts / live forms: the id follows the path segment.
+        if let match = string.firstMatch(of: /(?:youtu\.be\/|\/embed\/|\/shorts\/|\/live\/)([A-Za-z0-9_-]{11})/) {
+            return String(match.1)
+        }
+        return nil
+    }
 }
 
 extension Track {

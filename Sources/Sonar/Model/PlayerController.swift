@@ -334,14 +334,26 @@ final class PlayerController: ObservableObject {
         let urls = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
             .map(String.init)
             .filter { $0.contains("http") }
-        let newItems: [DownloadItem] = urls.compactMap { url in
-            guard seen.insert(url).inserted else { return nil }
-            return DownloadItem(url: url)
+        var newItems: [DownloadItem] = []
+        var skippedOwned = false
+        for url in urls {
+            if isAlreadyDownloaded(url) { skippedOwned = true; continue }  // instant, no network
+            guard seen.insert(url).inserted else { continue }
+            newItems.append(DownloadItem(url: url))
         }
+        if skippedOwned { downloader.notice = "Already in library" }
+        urlInput = ""
         guard !newItems.isEmpty else { return }
         downloadQueue.append(contentsOf: newItems)
-        urlInput = ""
         processDownloads()
+    }
+
+    /// Instant, no-network check: is this URL's video already in the library?
+    /// Only decides for URLs whose id we can parse locally; anything else returns
+    /// false here and is resolved for real at download time.
+    func isAlreadyDownloaded(_ url: String) -> Bool {
+        guard let id = Track.youtubeID(from: url) else { return false }
+        return library.tracks.contains { $0.videoID == id }
     }
 
     private func processDownloads() {
@@ -358,14 +370,19 @@ final class PlayerController: ObservableObject {
     private func runDownload(_ url: String) async {
         // Skip if we already have this exact video (matched by its id).
         downloader.beginChecking()
-        if let videoID = await downloader.fetchVideoID(url),
-           library.tracks.contains(where: { $0.videoID == videoID }) {
+        // Dedupe with the locally-parsed id first; only ask yt-dlp when we can't
+        // parse the URL ourselves.
+        var videoID = Track.youtubeID(from: url)
+        if videoID == nil { videoID = await downloader.fetchVideoID(url) }
+        if let videoID, library.tracks.contains(where: { $0.videoID == videoID }) {
             downloader.finishChecking(message: "Already in library")
+            downloader.notice = "Already in library"   // surfaced as a toast
             return
         }
         guard let fileURL = await downloader.download(url, into: library.folder) else { return }
         // Just add it to the library — don't hijack whatever is currently playing.
         await library.add(fileURL)
+        downloader.notice = "Added to library"          // success toast
     }
 
     /// Drop one queued (not-yet-started) item. No-op for the active download —
