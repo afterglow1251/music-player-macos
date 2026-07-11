@@ -1032,37 +1032,35 @@ struct PlayerWindow: View {
 
     private func groupHeader(_ section: LibrarySection) -> some View {
         let collapsed = collapsedGroups.contains(section.id)
-        return VStack(spacing: 0) {
-            // Hairline above each section so the groups read as distinct blocks.
-            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
-                .padding(.horizontal, 6)
-            HStack(spacing: 8) {
-                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(accent.opacity(0.7))
-                    .frame(width: 14)
-                // Accent-colored, uppercased label so a section name never blends
-                // with the white track titles below it.
-                Text(section.id.uppercased())
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(accent)
-                    .lineLimit(1)
-                    .tracking(0.5)
-                Text("\(section.tracks.count)")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(accent.opacity(0.5))
-                Spacer()
-                Button { controller.playGroup(section.tracks) } label: {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(accent)
-                        .frame(width: 22, height: 22).contentShape(Rectangle())
-                }
-                .buttonStyle(PressableButtonStyle())
-                .tooltip("Play")
+        return HStack(spacing: 7) {
+            // A soft rotating chevron — quiet, animates open/closed.
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white.opacity(0.3))
+                .rotationEffect(.degrees(collapsed ? 0 : 90))
+                .frame(width: 11)
+            // Section name in a soft accent (matches playlist headers) — colored, so
+            // it never blends with the white track titles, but not shouty.
+            Text(section.id)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(accent.opacity(0.85))
+                .lineLimit(1)
+            Text("\(section.tracks.count)")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.3))
+            Spacer()
+            Button { controller.playGroup(section.tracks) } label: {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 15))
+                    .foregroundStyle(accent.opacity(0.9))
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
             }
-            .padding(.horizontal, 8).padding(.top, 7).padding(.bottom, 5)
+            .buttonStyle(PressableButtonStyle())
+            .tooltip("Play")
         }
+        // Generous space above separates one section from the previous rows; snug
+        // below so the header sits close to its own tracks.
+        .padding(.horizontal, 8).padding(.top, 12).padding(.bottom, 3)
         .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.18)) {
