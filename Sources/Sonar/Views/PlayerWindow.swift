@@ -19,6 +19,7 @@ struct PlayerWindow: View {
     @State private var dragCursorY: CGFloat = 0
     // Collapsed artist sections (Artist view).
     @State private var collapsedGroups: Set<String> = []
+    @State private var viewMenuHover = false
     // Source switcher: nil = the whole library, otherwise the viewed playlist.
     @State private var selectedPlaylistID: Playlist.ID?
     @State private var renamingPlaylist = false
@@ -992,10 +993,16 @@ struct PlayerWindow: View {
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
+            // Grow + brighten on hover to match the neighbouring icon buttons
+            // (a Menu can't use PressableButtonStyle, so do it by hand).
             Image(systemName: controller.library.view.symbol)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
                 .frame(width: 22, height: 22).contentShape(Rectangle())
+                .brightness(viewMenuHover ? 0.10 : 0)
+                .scaleEffect(viewMenuHover ? 1.10 : 1)
+                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: viewMenuHover)
+                .onHover { viewMenuHover = $0 }
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
