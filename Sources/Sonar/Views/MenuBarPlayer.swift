@@ -118,18 +118,6 @@ private struct MiniPlayerView: View {
         }
         .padding(12)
         .frame(width: 268)
-        // Open the main app — pinned to the top-right corner, across from the title.
-        .overlay(alignment: .topTrailing) {
-            PressButton(action: onShowMain) {
-                Image(systemName: "macwindow")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .padding(6)
-                    .contentShape(Rectangle())
-            }
-            .help("Show Sonar")
-            .padding(6)
-        }
     }
 
     private var header: some View {
@@ -147,8 +135,15 @@ private struct MiniPlayerView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Keep the title clear of the top-right open-app button.
-            .padding(.trailing, 22)
+
+            PressButton(action: onShowMain) {
+                Image(systemName: "macwindow")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(6)
+                    .contentShape(Rectangle())
+            }
+            .help("Show Sonar")
         }
     }
 
