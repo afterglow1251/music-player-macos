@@ -58,6 +58,11 @@ final class PlayerController: ObservableObject {
 
         engine.onFinished = { [weak self] in self?.next(auto: true) }
 
+        // Gapless: the engine preloads the next track and, when it advances to it
+        // seamlessly, asks us to reconcile state without a reload.
+        engine.nextURLProvider = { [weak self] in self?.peekNextURL() }
+        engine.onAdvanced = { [weak self] url in self?.commitAdvance(to: url) }
+
         // Media keys / Control Center → us.
         nowPlaying.onPlay = { [weak self] in self?.engine.play() }
         nowPlaying.onPause = { [weak self] in self?.engine.pause() }
@@ -194,6 +199,37 @@ final class PlayerController: ObservableObject {
         guard !list.isEmpty, let index = list.firstIndex(where: { $0 == currentTrack }) else { return }
         if shuffle { play(randomTrack(in: list, excluding: index), in: list); return }
         play(list[index > 0 ? index - 1 : list.count - 1], in: list)
+    }
+
+    /// The URL that will play next, computed WITHOUT side effects — the engine
+    /// uses it to preload for a gapless join. Mirrors `next(auto:)`'s selection.
+    /// Returns nil when playback should stop or the transition can't be gapless
+    /// (shuffle draws randomly at advance time; end of scope).
+    private func peekNextURL() -> URL? {
+        if sleepMode == .endOfTrack { return nil }
+        if repeatMode == .one { return currentTrack?.url }
+        if let queued = queue.first { return queued.track.url }
+        if shuffle { return nil }
+        let list = activeScope
+        guard !list.isEmpty else { return nil }
+        guard let index = list.firstIndex(where: { $0 == currentTrack }) else { return list.first?.url }
+        let nextIndex = index + 1
+        if nextIndex < list.count { return list[nextIndex].url }
+        if repeatMode == .all { return list.first?.url }
+        return nil
+    }
+
+    /// Reconcile our state to a track the engine has already advanced to
+    /// gaplessly — no `play()` / reload, the audio is already flowing.
+    private func commitAdvance(to url: URL) {
+        guard let track = library.tracks.first(where: { $0.url == url }) else { return }
+        if queue.first?.track.url == url {
+            queue.removeFirst()
+            scope = library.tracks          // a queued track plays in the library scope, like play()
+        }
+        currentTrack = track
+        updateNowPlaying()
+        save()
     }
 
     func delete(_ track: Track) {

@@ -70,6 +70,39 @@ final class AudioEngine: ObservableObject {
 
     private var progressTimer: Timer?
 
+    // MARK: Gapless
+
+    /// The next track, opened and queued back-to-back on the same node so it
+    /// starts sample-accurately when the current one ends — no stop/reload seam.
+    private struct Scheduled {
+        let url: URL
+        let file: AVAudioFile
+        let frames: AVAudioFramePosition
+        let sampleRate: Double
+        let duration: TimeInterval
+        let title: String
+    }
+    private var pendingAdvance: Scheduled?
+    /// Frames of already-finished segments since the last hard reset. The node's
+    /// sampleTime never resets across a seamless join, so `currentTime` subtracts
+    /// this to measure only into the current track.
+    private var basePlayed: AVAudioFramePosition = 0
+    /// Frame count of the current track's scheduled segment.
+    private var currentFrames: AVAudioFramePosition = 0
+    /// Bumped on every hard reset (load/stop/seek) so a completion callback from a
+    /// flushed segment is ignored when it fires late.
+    private var generation = 0
+    private var didPreschedule = false
+    /// Preload the next track this many seconds before the current one ends.
+    private let prescheduleLead: TimeInterval = 5
+
+    /// Supplies the URL that will play next (for gapless preloading), or nil to
+    /// let playback stop / fall back to the non-gapless path. Set by the controller.
+    var nextURLProvider: (() -> URL?)?
+    /// Called when playback advances gaplessly to the prescheduled next track, so
+    /// the controller can reconcile its state without triggering a reload.
+    var onAdvanced: ((URL) -> Void)?
+
     init() {
         engine.attach(player)
         engine.attach(eq)
@@ -95,7 +128,7 @@ final class AudioEngine: ObservableObject {
     // MARK: Loading
 
     func load(url: URL, autoplay: Bool = true) {
-        stop()
+        hardReset()
         do {
             let file = try AVAudioFile(forReading: url)
             audioFile = file
@@ -148,19 +181,37 @@ final class AudioEngine: ObservableObject {
     }
 
     func stop() {
+        hardReset()
+        if audioFile != nil { schedule(from: 0) }   // re-arm so a later play() works
+    }
+
+    /// Stop the node and drop all gapless bookkeeping, WITHOUT rescheduling.
+    /// Bumping the generation invalidates any completion callback still pending
+    /// from a segment that's about to be flushed. Callers that need playback
+    /// re-armed (stop/seek/load) schedule right afterwards.
+    private func hardReset() {
+        generation += 1
+        pendingAdvance = nil
+        didPreschedule = false
+        basePlayed = 0
         player.stop()
         isPlaying = false
         analyzer.isRunning = false
         stopProgressTimer()
         currentTime = 0
         seekFrame = 0
-        if audioFile != nil { schedule(from: 0) }
     }
 
     /// Seek to `time` seconds and keep playing if we were playing.
     func seek(to time: TimeInterval) {
         guard let file = audioFile else { return }
         let wasPlaying = isPlaying
+        // A seek is a hard reset of the node's timeline: invalidate any gapless
+        // preschedule and clear the played-frames base before rescheduling.
+        generation += 1
+        pendingAdvance = nil
+        didPreschedule = false
+        basePlayed = 0
         player.stop()
 
         let target = AVAudioFramePosition(max(0, min(time, duration)) * sampleRate)
@@ -178,11 +229,64 @@ final class AudioEngine: ObservableObject {
         guard let file = audioFile else { return }
         let remaining = AVAudioFrameCount(max(0, totalFrames - frame))
         guard remaining > 0 else { return }
+        currentFrames = AVAudioFramePosition(remaining)
         file.framePosition = frame
+        let gen = generation
         player.scheduleSegment(file,
                                startingFrame: frame,
                                frameCount: remaining,
-                               at: nil)
+                               at: nil,
+                               completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in
+            Task { @MainActor in self?.segmentFinished(gen) }
+        }
+    }
+
+    /// Open the upcoming track and queue it back-to-back on the same node so it
+    /// starts the instant the current one ends. Same-format only — appending to a
+    /// live node can't change format, so a differing sample rate / channel count
+    /// is left for the normal load path (a seam only on that rare transition).
+    private func prescheduleNext() {
+        guard pendingAdvance == nil, let current = audioFile,
+              let url = nextURLProvider?(),
+              let file = try? AVAudioFile(forReading: url) else { return }
+        let next = file.processingFormat, cur = current.processingFormat
+        guard next.sampleRate == cur.sampleRate, next.channelCount == cur.channelCount else { return }
+        let gen = generation
+        file.framePosition = 0
+        player.scheduleSegment(file,
+                               startingFrame: 0,
+                               frameCount: AVAudioFrameCount(file.length),
+                               at: nil,
+                               completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in
+            Task { @MainActor in self?.segmentFinished(gen) }
+        }
+        pendingAdvance = Scheduled(url: url, file: file, frames: file.length,
+                                   sampleRate: next.sampleRate,
+                                   duration: Double(file.length) / next.sampleRate,
+                                   title: url.deletingPathExtension().lastPathComponent.uppercased())
+    }
+
+    /// A scheduled segment finished playing. If a next track was prescheduled it's
+    /// already flowing — promote it to current (gaplessly); otherwise this is a
+    /// real end-of-track with nothing queued, so signal auto-advance.
+    private func segmentFinished(_ gen: Int) {
+        guard gen == generation else { return }   // a flushed / stale segment
+        if let next = pendingAdvance {
+            basePlayed += currentFrames            // the node's clock keeps running
+            audioFile = next.file
+            totalFrames = next.frames
+            currentFrames = next.frames
+            duration = next.duration
+            sampleRate = next.sampleRate
+            seekFrame = 0
+            currentTime = 0
+            trackTitle = next.title
+            pendingAdvance = nil
+            didPreschedule = false
+            onAdvanced?(next.url)
+        } else {
+            onFinished?()
+        }
     }
 
     // MARK: Progress
@@ -202,11 +306,15 @@ final class AudioEngine: ObservableObject {
     private func updateProgress() {
         guard let nodeTime = player.lastRenderTime,
               let playerTime = player.playerTime(forNodeTime: nodeTime) else { return }
-        let played = Double(seekFrame + playerTime.sampleTime) / sampleRate
-        currentTime = min(max(0, played), duration)
-        if currentTime >= duration, duration > 0 {
-            stop()
-            onFinished?()
+        // The node's sampleTime spans every gapless segment since the last hard
+        // reset; subtract the finished frames to get the position in THIS track.
+        let intoCurrent = playerTime.sampleTime - basePlayed
+        currentTime = min(max(0, Double(seekFrame + intoCurrent) / sampleRate), duration)
+        // Preload the next track a few seconds before the seam. End-of-track is
+        // no longer polled here — the segment completion callback drives advance.
+        if isPlaying, !didPreschedule, duration > 0, currentTime >= duration - prescheduleLead {
+            didPreschedule = true
+            prescheduleNext()
         }
     }
 
