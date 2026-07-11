@@ -1072,6 +1072,10 @@ struct PlayerWindow: View {
                                         text: $controller.urlInput,
                                         onSubmit: { startDownload() },
                                         focus: $urlFieldFocused)
+                            // A space finalises the URL before it: chip it right
+                            // away (also handles pasting several space-separated
+                            // links at once).
+                            .onChange(of: controller.urlInput) { _, _ in chipCompletedURLs() }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1212,6 +1216,25 @@ struct PlayerWindow: View {
 
     private var pendingURLCount: Int {
         urlChips.count + (controller.urlInput.contains("http") ? 1 : 0)
+    }
+
+    /// Called as the field changes: any token the user has "finished" with a
+    /// space (typed or pasted) becomes a chip immediately, if it's a valid URL.
+    /// Whatever is still being typed after the last space stays in the field.
+    private func chipCompletedURLs() {
+        guard controller.urlInput.contains(" ") else { return }
+        let taken = { Set(self.urlChips).union(self.controller.downloadQueue.map(\.url)) }
+        while let space = controller.urlInput.firstIndex(of: " ") {
+            let head = String(controller.urlInput[..<space]).trimmingCharacters(in: .whitespaces)
+            let tail = String(controller.urlInput[controller.urlInput.index(after: space)...])
+            if head.isEmpty { controller.urlInput = tail; continue }  // stray/leading space
+            // Stop at the first non-URL token so we never eat plain text.
+            guard head.contains("http") else { break }
+            if !taken().contains(head) {
+                withAnimation(.easeInOut(duration: 0.2)) { urlChips.append(head) }
+            }
+            controller.urlInput = tail
+        }
     }
 
     /// Turn the current field into a chip so another link can be added.
