@@ -238,7 +238,8 @@ final class MilkdropRenderer: NSObject, MTKViewDelegate {
 
     // MARK: Motion
 
-    /// Step presets, beat kick, and per-frame warp amounts; returns this frame's uniforms.
+    /// Step presets + beat kick, and — crucially — drive the warp from the live
+    /// spectrum so the motion actually tracks the music. Returns this frame's uniforms.
     private func advance(size: CGSize) -> MilkUniforms {
         let now = CACurrentMediaTime()
         var dt = lastTime == 0 ? 1.0 / 60 : now - lastTime
@@ -246,7 +247,24 @@ final class MilkdropRenderer: NSObject, MTKViewDelegate {
         lastTime = now
         if lastSwitch == 0 { lastSwitch = now }
 
-        // Morph toward the target preset; rotate the lineup every ~14s.
+        // Advance the analyzer here (this is what refreshes bass + bars) and split
+        // the spectrum into low / mid / high energy bands.
+        let bars = analyzer.render(at: now).bars
+        let n = bars.count
+        func band(_ lo: Int, _ hi: Int) -> Float {
+            let a = max(0, lo), b = min(n, hi)
+            guard b > a else { return 0 }
+            var sum: Float = 0
+            for i in a..<b { sum += bars[i] }
+            return sum / Float(b - a)
+        }
+        let low = band(0, n / 5)
+        let mid = band(n / 5, n * 3 / 5)
+        let high = band(n * 3 / 5, n)
+        let level = band(0, n)
+        let bass = analyzer.bassLevel
+
+        // The preset is just a base "style"; morph the lineup every ~14s for variety.
         if now - lastSwitch > 14 {
             targetIndex = (targetIndex + 1) % Preset.presets.count
             lastSwitch = now
@@ -254,25 +272,27 @@ final class MilkdropRenderer: NSObject, MTKViewDelegate {
         current = current.morphed(toward: Preset.presets[targetIndex], rate: Float(dt) * 0.5)
 
         // Beat: a rising bass edge kicks the zoom (decays over the next frames).
-        let bass = analyzer.bassLevel
         zoomKick *= 0.9
         if bass > 0.5, bass - prevBass > 0.08, now - lastBeat > 0.22 {
-            zoomKick = 0.05
+            zoomKick = 0.06
             lastBeat = now
         }
         prevBass = bass
 
+        // Audio drives the motion: lows push the zoom, mids spin it, highs + overall
+        // energy ripple it. Quiet passages stay calm; loud, busy ones go wild — so
+        // different songs and sections look different.
         let aspect = size.height > 0 ? Float(size.width / size.height) : 1
         return MilkUniforms(
             resolution: SIMD2<Float>(Float(size.width), Float(size.height)),
             aspect: aspect,
             time: Float(now.truncatingRemainder(dividingBy: 1000)),
-            zoom: current.zoom + zoomKick,
-            rot: current.rotRate * Float(dt),
-            warpAmp: current.warpAmp * (1 + bass * 0.6),
-            warpFreq: current.warpFreq,
+            zoom: current.zoom + low * 0.03 + zoomKick,
+            rot: current.rotRate * (0.35 + mid * 2.5) * Float(dt),
+            warpAmp: min(current.warpAmp * (0.5 + high * 3.5 + level * 1.5), 0.14),
+            warpFreq: current.warpFreq + mid * 4,
             decay: current.decay,
-            level: bass)
+            level: level)
     }
 
     /// Draw the live waveform straight across the full width, colored across the
