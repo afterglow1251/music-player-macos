@@ -41,8 +41,9 @@ struct LyricsView: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 12) {
-                    // Top/bottom padding so the first and last lines can center.
-                    Color.clear.frame(height: height * 0.4)
+                    // Small top inset so the first line starts near the top; a large
+                    // bottom inset so the last line can still center during playback.
+                    Color.clear.frame(height: 24)
                     ForEach(Array(controller.lyrics.lines.enumerated()), id: \.element.id) { index, line in
                         lineView(line.text, active: index == activeIndex)
                             .id(index)
@@ -58,6 +59,12 @@ struct LyricsView: View {
                 withAnimation(.easeInOut(duration: 0.3)) {
                     proxy.scrollTo(new, anchor: .center)
                 }
+            }
+            .onAppear {
+                // Opening mid-song: jump straight to the current line instead of
+                // waiting for the next activeIndex change to trigger a scroll.
+                guard let idx = activeIndex else { return }
+                proxy.scrollTo(idx, anchor: .center)
             }
         }
     }
