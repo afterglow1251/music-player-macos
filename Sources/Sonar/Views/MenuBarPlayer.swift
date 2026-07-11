@@ -118,6 +118,19 @@ private struct MiniPlayerView: View {
         .padding(12)
         .frame(width: 268)
         .background(Color(nsColor: .windowBackgroundColor))
+        // Open the main app — pinned to the top-right corner, across from the title.
+        .overlay(alignment: .topTrailing) {
+            Button(action: onShowMain) {
+                Image(systemName: "macwindow")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(6)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show Sonar")
+            .padding(6)
+        }
     }
 
     private var header: some View {
@@ -134,14 +147,9 @@ private struct MiniPlayerView: View {
                         .lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
-            Button(action: onShowMain) {
-                Image(systemName: "macwindow")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Show Sonar")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Keep the title clear of the top-right open-app button.
+            .padding(.trailing, 22)
         }
     }
 
@@ -167,17 +175,21 @@ private struct MiniPlayerView: View {
             GeometryReader { geo in
                 let width = geo.size.width
                 let barHeight: CGFloat = barHover ? 5 : 4
-                let knobX = min(max(width * fraction, 5), max(width - 5, 5))
+                let knobX = min(max(width * fraction, 7.5), max(width - 7.5, 7.5))
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(barHover ? 0.22 : 0.15)).frame(height: barHeight)
                     Capsule().fill(accent).frame(width: width * fraction, height: barHeight)
                     // A knob that only appears on hover (Spotify/Apple-Music style),
-                    // sitting at the playhead — the native Slider can't hide its thumb.
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 10, height: 10)
-                        .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
-                        .offset(x: knobX - 5)
+                    // sitting at the playhead. Shaped like the native macOS slider
+                    // thumb — a light, gradient-filled horizontal pill — since the
+                    // real Slider can't hide its thumb.
+                    Capsule()
+                        .fill(LinearGradient(colors: [Color(white: 0.98), Color(white: 0.86)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .frame(width: 15, height: 11)
+                        .overlay(Capsule().strokeBorder(.black.opacity(0.18), lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.35), radius: 1.5, y: 0.5)
+                        .offset(x: knobX - 7.5)
                         .opacity(barHover ? 1 : 0)
                 }
                 // Taller invisible hit area so the thin bar is easy to grab; drag or
