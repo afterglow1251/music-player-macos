@@ -17,7 +17,7 @@ final class MenuBarController {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem.button {
-            button.image = Self.icon(playing: false)
+            button.image = Self.icon
             button.imagePosition = .imageLeading
             // Anchor the icon to the left edge so it never drifts when the title
             // truncates within the fixed-width slot.
@@ -42,20 +42,19 @@ final class MenuBarController {
 
     // MARK: Button
 
-    /// Fixed slot width while a title is shown, so the item — and the popover
-    /// anchored to its centre — never shift as tracks change. Only play/pause
-    /// toggles the width (text ⇄ icon-only); track changes stay put.
-    private static let playingWidth: CGFloat = 160
+    /// Fixed slot width when a title is shown, so the item (and the popover
+    /// anchored to it) never shifts.
+    private static let titleWidth: CGFloat = 160
 
+    /// The menu-bar item depends ONLY on which track is loaded — never on play
+    /// state — so toggling play/pause leaves it perfectly still (no icon swap, no
+    /// resize). Same icon always; the title shows whenever a track is loaded
+    /// (playing or paused), truncated within a fixed slot.
     private func refreshButton() {
         guard let button = statusItem.button else { return }
-        let playing = controller.engine.isPlaying
-        button.image = Self.icon(playing: playing)
-        // Show the title only while something is actually playing, so the menu
-        // bar stays quiet at rest. The slot is a fixed width and the title
-        // truncates within it, keeping everything to the left from jumping.
-        if playing, let track = controller.currentTrack {
-            statusItem.length = Self.playingWidth
+        button.image = Self.icon
+        if let track = controller.currentTrack {
+            statusItem.length = Self.titleWidth
             button.attributedTitle = Self.title(track.displayTitle)
         } else {
             statusItem.length = NSStatusItem.variableLength
@@ -72,12 +71,12 @@ final class MenuBarController {
         ])
     }
 
-    private static func icon(playing: Bool) -> NSImage? {
-        let name = playing ? "waveform" : "music.note"
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Sonar")
+    /// One stable icon, regardless of play state.
+    private static let icon: NSImage? = {
+        let image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Sonar")
         image?.isTemplate = true
         return image
-    }
+    }()
 
     // MARK: Popover
 
