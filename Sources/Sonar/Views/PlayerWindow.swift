@@ -17,8 +17,8 @@ struct PlayerWindow: View {
     @State private var rowFrames: [String: CGRect] = [:]
     @State private var draggingID: String?
     @State private var dragCursorY: CGFloat = 0
-    // Grouping (auto by artist for now).
-    @State private var groupByArtist = false
+    // Auto-grouping of the library list into collapsible sections.
+    @State private var grouping: LibraryGrouping = .none
     @State private var collapsedGroups: Set<String> = []
     // Source switcher: nil = the whole library, otherwise the viewed playlist.
     @State private var selectedPlaylistID: Playlist.ID?
@@ -573,14 +573,7 @@ struct PlayerWindow: View {
                     .foregroundStyle(.white.opacity(0.3))
                 Spacer()
                 if !controller.library.tracks.isEmpty {
-                    Button { withAnimation(.easeInOut(duration: 0.2)) { groupByArtist.toggle() } } label: {
-                        Image(systemName: "person.2")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(groupByArtist ? accent : .white.opacity(0.55))
-                            .frame(width: 22, height: 22).contentShape(Rectangle())
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    .tooltip(groupByArtist ? "Ungroup" : "Group by artist")
+                    sortGroupMenu
                 }
                 Button { controller.library.revealInFinder() } label: {
                     Image(systemName: "folder").font(.system(size: 12, weight: .medium))
@@ -868,9 +861,9 @@ struct PlayerWindow: View {
                     if filteredTracks.isEmpty {
                         emptyMessage("No tracks match “\(searchText)”")
                     }
-                    if groupByArtist && searchText.isEmpty {
+                    if grouping != .none && searchText.isEmpty {
                         // Collapsible auto-group sections, each playable as its own scope.
-                        ForEach(artistSections) { section in
+                        ForEach(librarySections) { section in
                             groupHeader(section)
                             if !collapsedGroups.contains(section.id) {
                                 ForEach(section.tracks) { track in
@@ -879,8 +872,10 @@ struct PlayerWindow: View {
                             }
                         }
                     } else {
+                        // Drag-to-reorder only makes sense in the flat, manually-ordered list.
+                        let canReorder = searchText.isEmpty && controller.library.sort == .manual
                         ForEach(filteredTracks) { track in
-                            libraryRow(track, reorderID: searchText.isEmpty ? track.url.path : nil)
+                            libraryRow(track, reorderID: canReorder ? track.url.path : nil)
                         }
                     }
                 }
@@ -955,11 +950,67 @@ struct PlayerWindow: View {
                                       cursorY: dragCursorY, frames: rowFrames))
     }
 
-    // MARK: Auto-groups (by artist)
+    // MARK: Sort & group
 
-    private var artistSections: [LibrarySection] {
-        Dictionary(grouping: filteredTracks) { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
-            .map { LibrarySection(id: $0.key, tracks: $0.value) }
+    /// Header menu: choose the library sort order and how it's auto-sectioned.
+    private var sortGroupMenu: some View {
+        let active = grouping != .none || controller.library.sort != .manual
+        return Menu {
+            Section("Sort by") {
+                Picker("Sort", selection: sortBinding) {
+                    ForEach(LibrarySort.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+            Section("Group by") {
+                Picker("Group", selection: groupBinding) {
+                    ForEach(LibraryGrouping.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(active ? accent : .white.opacity(0.55))
+                .frame(width: 22, height: 22).contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .tooltip("Sort & group")
+    }
+
+    private var sortBinding: Binding<LibrarySort> {
+        Binding(get: { controller.library.sort },
+                set: { controller.library.setSort($0) })
+    }
+
+    private var groupBinding: Binding<LibraryGrouping> {
+        Binding(get: { grouping },
+                set: { new in withAnimation(.easeInOut(duration: 0.2)) { grouping = new } })
+    }
+
+    // MARK: Auto-groups (by artist / album)
+
+    /// The library split into collapsible sections per the current `grouping`.
+    /// Album sections read in track-number order; sections are alphabetical.
+    private var librarySections: [LibrarySection] {
+        let key: (Track) -> String
+        switch grouping {
+        case .none:   return []
+        case .artist: key = { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
+        case .album:  key = { $0.album.isEmpty ? "Unknown Album" : $0.album }
+        }
+        return Dictionary(grouping: filteredTracks, by: key)
+            .map { entry in
+                let tracks = grouping == .album
+                    ? entry.value.sorted { ($0.trackNumber ?? .max, $0.displayTitle.lowercased())
+                                         < ($1.trackNumber ?? .max, $1.displayTitle.lowercased()) }
+                    : entry.value
+                return LibrarySection(id: entry.key, tracks: tracks)
+            }
             .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
     }
 

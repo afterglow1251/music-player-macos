@@ -11,6 +11,8 @@ import AppKit
 final class MusicLibrary: ObservableObject {
     @Published private(set) var tracks: [Track] = []
     @Published private(set) var folder: URL
+    /// Current ordering (manual drag order, or sorted by a track field).
+    @Published private(set) var sort: LibrarySort
 
     private let prefs = Preferences()
     private static let audioExtensions: Set<String> = ["mp3", "m4a", "wav", "aiff", "aif", "flac"]
@@ -22,6 +24,7 @@ final class MusicLibrary: ObservableObject {
 
     init() {
         folder = Self.resolveFolder(prefs: Preferences())
+        sort = prefs.librarySort
         Self.migrateLegacyFiles(into: folder)
         startWatching()
         Task { await scan() }
@@ -35,19 +38,25 @@ final class MusicLibrary: ObservableObject {
         NSWorkspace.shared.open(folder)
     }
 
-    /// Reload every audio file in the folder.
+    /// Reload every audio file in the folder, **recursing into subfolders** so a
+    /// normal Artist/Album/ tree is picked up, not just a flat drop folder.
     func scan() async {
         let fm = FileManager.default
-        let urls = (try? fm.contentsOfDirectory(at: folder,
-                                                includingPropertiesForKeys: nil,
-                                                options: [.skipsHiddenFiles])) ?? []
-        let audioURLs = urls.filter { Self.audioExtensions.contains($0.pathExtension.lowercased()) }
+        let audioURLs: [URL]
+        if let enumerator = fm.enumerator(at: folder,
+                                          includingPropertiesForKeys: [.isRegularFileKey],
+                                          options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
+            audioURLs = enumerator.compactMap { $0 as? URL }
+                .filter { Self.audioExtensions.contains($0.pathExtension.lowercased()) }
+        } else {
+            audioURLs = []
+        }
 
         var loaded: [Track] = []
         for url in audioURLs {
             loaded.append(await Track.load(from: url))
         }
-        tracks = ordered(loaded)
+        tracks = arranged(loaded)
     }
 
     /// Add a single freshly-downloaded file without rescanning everything.
@@ -57,9 +66,18 @@ final class MusicLibrary: ObservableObject {
         if let existing = tracks.firstIndex(of: track) {
             tracks[existing] = track
         } else {
-            tracks = ordered(tracks + [track])
+            tracks = arranged(tracks + [track])
         }
         return track
+    }
+
+    /// Switch the ordering. `.manual` restores the saved hand-arranged order; the
+    /// others sort the current tracks by a field. Persisted so it survives relaunch.
+    func setSort(_ newSort: LibrarySort) {
+        guard newSort != sort else { return }
+        sort = newSort
+        prefs.librarySort = newSort
+        tracks = arranged(tracks)
     }
 
     // MARK: Manual order
@@ -74,6 +92,14 @@ final class MusicLibrary: ObservableObject {
     private func applyManual(_ list: [Track]) {
         tracks = list
         prefs.libraryOrder = list.map(\.url.path)
+        setManualSort()
+    }
+
+    /// Any hand reorder implies the manual order is now what the user wants back.
+    private func setManualSort() {
+        guard sort != .manual else { return }
+        sort = .manual
+        prefs.librarySort = .manual
     }
 
     /// Live reorder while a drag is in progress — moves the track with `path` to
@@ -88,7 +114,10 @@ final class MusicLibrary: ObservableObject {
     }
 
     /// Persist the current order once a drag finishes.
-    func commitOrder() { prefs.libraryOrder = tracks.map(\.url.path) }
+    func commitOrder() {
+        prefs.libraryOrder = tracks.map(\.url.path)
+        setManualSort()
+    }
 
     /// Move a track's file to the Trash and drop it from the library.
     func delete(_ track: Track) {
@@ -165,10 +194,21 @@ final class MusicLibrary: ObservableObject {
         }
     }
 
+    /// Order a freshly-scanned list by the active `sort`.
+    private func arranged(_ list: [Track]) -> [Track] {
+        switch sort {
+        case .manual:    return manuallyOrdered(list)
+        case .title:     return list.sorted { titleKey($0) < titleKey($1) }
+        case .artist:    return list.sorted(by: albumTrackOrder(artistFirst: true))
+        case .album:     return list.sorted(by: albumTrackOrder(artistFirst: false))
+        case .dateAdded: return list.sorted { ($0.dateAdded ?? .distantPast) > ($1.dateAdded ?? .distantPast) }
+        }
+    }
+
     /// Reconcile a list with the saved manual order: known files keep their saved
     /// position, new files sort in alphabetically at the end, and the merged order
     /// is persisted.
-    private func ordered(_ list: [Track]) -> [Track] {
+    private func manuallyOrdered(_ list: [Track]) -> [Track] {
         let position = Dictionary(prefs.libraryOrder.enumerated().map { ($1, $0) },
                                   uniquingKeysWith: { first, _ in first })
         let sorted = list.sorted { a, b in
@@ -182,6 +222,24 @@ final class MusicLibrary: ObservableObject {
         }
         prefs.libraryOrder = sorted.map(\.url.path)
         return sorted
+    }
+
+    private func titleKey(_ t: Track) -> String { t.displayTitle.lowercased() }
+
+    /// Group tracks so an album reads in the right order: (optionally artist →)
+    /// album → track number → title. Untagged fields sort last within their level.
+    private func albumTrackOrder(artistFirst: Bool) -> (Track, Track) -> Bool {
+        { a, b in
+            if artistFirst {
+                let x = a.artist.lowercased(), y = b.artist.lowercased()
+                if x != y { return x.isEmpty ? false : (y.isEmpty ? true : x < y) }
+            }
+            let al = a.album.lowercased(), bl = b.album.lowercased()
+            if al != bl { return al.isEmpty ? false : (bl.isEmpty ? true : al < bl) }
+            let an = a.trackNumber ?? Int.max, bn = b.trackNumber ?? Int.max
+            if an != bn { return an < bn }
+            return a.displayTitle.localizedCaseInsensitiveCompare(b.displayTitle) == .orderedAscending
+        }
     }
 
     // MARK: Folder resolution & migration

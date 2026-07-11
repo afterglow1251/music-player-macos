@@ -1,5 +1,21 @@
 import Foundation
 
+/// How the library list is ordered. `manual` is the hand-arranged drag order
+/// (persisted as `libraryOrder`); the rest sort by a track field.
+enum LibrarySort: String, CaseIterable {
+    case manual, title, artist, album, dateAdded
+
+    var label: String {
+        switch self {
+        case .manual:    return "Manual"
+        case .title:     return "Title"
+        case .artist:    return "Artist"
+        case .album:     return "Album"
+        case .dateAdded: return "Date added"
+        }
+    }
+}
+
 /// Typed wrapper over `UserDefaults`. One place owns every key **and** its type,
 /// so a read and a write can never disagree, and a mistyped key is a compile
 /// error rather than a silent runtime bug.
@@ -21,10 +37,10 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.libraryOrder.rawValue) }
     }
 
-    /// Raw value of `LibrarySort` (manual / title / dateAdded).
-    var librarySort: String? {
-        get { defaults.string(forKey: Key.librarySort.rawValue) }
-        set { defaults.set(newValue, forKey: Key.librarySort.rawValue) }
+    /// How the library is sorted — defaults to `.manual` (the hand-arranged order).
+    var librarySort: LibrarySort {
+        get { defaults.string(forKey: Key.librarySort.rawValue).flatMap(LibrarySort.init) ?? .manual }
+        set { defaults.set(newValue.rawValue, forKey: Key.librarySort.rawValue) }
     }
 
     /// JSON-encoded `[Playlist]`.

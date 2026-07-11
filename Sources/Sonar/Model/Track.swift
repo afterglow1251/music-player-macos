@@ -9,8 +9,19 @@ struct Track: Identifiable, Hashable, Sendable {
     let id: URL
     var title: String
     var artist: String
+    var album: String
     var duration: TimeInterval
     var artworkData: Data?
+
+    /// Extended tags, best-effort. `year` is the 4-digit release year; `trackNumber`
+    /// is the position within its album (nil when the tag is absent). These drive
+    /// album grouping and metadata sorting.
+    var year: Int?
+    var trackNumber: Int?
+
+    /// When the file landed in the library folder — the OS "date added" (falling
+    /// back to creation date). Backs the "recently added" sort. nil if unreadable.
+    var dateAdded: Date?
 
     /// YouTube video id, for precise dedupe. Set at load time — read from the
     /// source-URL tag embedded in the file first (so it survives a rename),
@@ -68,9 +79,17 @@ extension Track {
         let asset = AVURLAsset(url: url)
         var title = ""
         var artist = ""
+        var album = ""
         var artworkData: Data?
         var duration: TimeInterval = 0
+        var year: Int?
+        var trackNumber: Int?
         var videoID: String?
+
+        // Date added: the OS "added to directory" date if the volume records it,
+        // else the file's creation date. Read cheaply from the URL, no asset load.
+        let dateAdded = (try? url.resourceValues(forKeys: [.addedToDirectoryDateKey, .creationDateKey]))
+            .flatMap { $0.addedToDirectoryDate ?? $0.creationDate }
 
         if let cmDuration = try? await asset.load(.duration) {
             duration = CMTimeGetSeconds(cmDuration)
@@ -86,10 +105,23 @@ extension Track {
                 let string = try? await item.load(.stringValue)
                 if let key = item.commonKey {
                     switch key {
-                    case .commonKeyTitle:   if let string { title = string }
-                    case .commonKeyArtist:  if let string { artist = string }
-                    case .commonKeyArtwork: if let data = try? await item.load(.dataValue) { artworkData = data }
+                    case .commonKeyTitle:        if let string { title = string }
+                    case .commonKeyArtist:       if let string { artist = string }
+                    case .commonKeyAlbumName:    if let string { album = string }
+                    case .commonKeyArtwork:      if let data = try? await item.load(.dataValue) { artworkData = data }
+                    case .commonKeyCreationDate: if year == nil, let string { year = releaseYear(from: string) }
                     default: break
+                    }
+                }
+                // Track number lives in format-specific tags (ID3 TRCK, iTunes trkn),
+                // not the common key set — match it by identifier. Values come as a
+                // number or a "3/12" string; take the leading integer either way.
+                if trackNumber == nil,
+                   item.identifier == .id3MetadataTrackNumber || item.identifier == .iTunesMetadataTrackNumber {
+                    if let number = try? await item.load(.numberValue) {
+                        trackNumber = number.intValue
+                    } else if let string {
+                        trackNumber = Int(string.prefix { $0.isNumber })
                     }
                 }
                 if videoID == nil, let string, let id = youtubeID(from: string) { videoID = id }
@@ -97,7 +129,14 @@ extension Track {
         }
         if videoID == nil { videoID = filenameVideoID(url) }
 
-        return Track(id: url, title: title, artist: artist,
-                     duration: duration, artworkData: artworkData, videoID: videoID)
+        return Track(id: url, title: title, artist: artist, album: album,
+                     duration: duration, artworkData: artworkData,
+                     year: year, trackNumber: trackNumber, dateAdded: dateAdded,
+                     videoID: videoID)
+    }
+
+    /// The leading 4-digit year out of a tag value like "2011" or "2011-05-03".
+    private static func releaseYear(from string: String) -> Int? {
+        string.firstMatch(of: /(\d{4})/).map { Int($0.1) } ?? nil
     }
 }
