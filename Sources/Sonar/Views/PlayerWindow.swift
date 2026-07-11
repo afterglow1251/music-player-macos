@@ -1067,6 +1067,9 @@ struct PlayerWindow: View {
                 if collapsed { collapsedGroups.remove(section.id) } else { collapsedGroups.insert(section.id) }
             }
         }
+        // Sit above the sibling rows so the play button's tooltip isn't covered by
+        // the tracks drawn after it.
+        .zIndex(1)
     }
 
     /// Reorder within a playlist live from the cursor's y position.
