@@ -557,7 +557,7 @@ struct PlayerWindow: View {
         VStack(spacing: 0) {
             if let playlist = selectedPlaylist { playlistHeader(playlist) } else { libraryHeader }
             if !searchActive { sourceBar }
-            Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6)
+            Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6).padding(.top, 6)
             list
         }
         // Transparent fill in fullscreen so it blends with the dark backdrop, but
