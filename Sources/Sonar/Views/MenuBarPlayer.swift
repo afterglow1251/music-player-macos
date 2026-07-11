@@ -118,27 +118,26 @@ private struct MiniPlayerView: View {
         }
         .padding(12)
         .frame(width: 268)
-        // Open the main app — pinned to the top-right corner, across from the title.
-        .overlay(alignment: .topTrailing) {
-            PressButton(action: onShowMain) {
-                Image(systemName: "macwindow")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .padding(6)
-                    .contentShape(Rectangle())
-            }
-            .help("Show Sonar")
-            .padding(6)
-        }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             artwork
             VStack(alignment: .leading, spacing: 2) {
-                Text(controller.currentTrack?.displayTitle ?? "Nothing playing")
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
+                HStack(spacing: 0) {
+                    Text(controller.currentTrack?.displayTitle ?? "Nothing playing")
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    PressButton(action: onShowMain) {
+                        Image(systemName: "macwindow")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .padding(6)
+                            .contentShape(Rectangle())
+                    }
+                    .help("Show Sonar")
+                }
                 if let artist = controller.currentTrack?.artist, !artist.isEmpty {
                     Text(artist)
                         .font(.system(size: 11))
@@ -147,8 +146,6 @@ private struct MiniPlayerView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Keep the title clear of the top-right open-app button.
-            .padding(.trailing, 22)
         }
     }
 
