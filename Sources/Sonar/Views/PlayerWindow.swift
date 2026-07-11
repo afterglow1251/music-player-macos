@@ -851,7 +851,11 @@ struct PlayerWindow: View {
                     emptyMessage("Your library is empty — paste a URL or open a file")
                 } else {
                     if filteredTracks.isEmpty {
-                        emptyMessage("No tracks match “\(searchText)”")
+                        if controller.favorites.filterActive && searchText.isEmpty {
+                            emptyMessage("No favorites yet — tap the heart on a track")
+                        } else {
+                            emptyMessage("No tracks match “\(searchText)”")
+                        }
                     }
                     if controller.library.view == .artist && searchText.isEmpty {
                         // Collapsible per-artist sections; single-track artists are
@@ -866,8 +870,11 @@ struct PlayerWindow: View {
                         }
                     } else {
                         // Flat list (Manual / Recent / A–Z, or while searching).
-                        // Drag-to-reorder only in the hand-arranged Manual view.
-                        let canReorder = searchText.isEmpty && controller.library.view == .manual
+                        // Drag-to-reorder only in the hand-arranged Manual view, and
+                        // not while filtered (search or favorites) — a subset can't be
+                        // safely reordered back into the full manual order.
+                        let canReorder = searchText.isEmpty && !controller.favorites.filterActive
+                            && controller.library.view == .manual
                         ForEach(filteredTracks) { track in
                             libraryRow(track, reorderID: canReorder ? track.url.path : nil)
                         }
@@ -892,7 +899,7 @@ struct PlayerWindow: View {
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
             durationText: timeString(track.duration),
-            onTap: { controller.play(track) },
+            onTap: { controller.play(track, in: libraryPlaybackScope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },
@@ -906,7 +913,9 @@ struct PlayerWindow: View {
                 withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
             },
             addToPlaylists: playlistMenuItems(for: track),
-            onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) }
+            onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) },
+            isFavorite: controller.favorites.isFavorite(path),
+            onToggleFavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.toggleFavorite(track) } }
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
                                       cursorY: dragCursorY, frames: rowFrames,
@@ -939,7 +948,9 @@ struct PlayerWindow: View {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     controller.playlists.remove(path: path, from: playlist.id)
                 }
-            }
+            },
+            isFavorite: controller.favorites.isFavorite(path),
+            onToggleFavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.toggleFavorite(track) } }
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
                                       cursorY: dragCursorY, frames: rowFrames))
@@ -951,6 +962,12 @@ struct PlayerWindow: View {
     /// button shows the active view's icon; each option carries its own icon.
     private var viewMenu: some View {
         Menu {
+            // Favorites is a filter, orthogonal to the sort below — you can view
+            // favorites only while still sorting them A–Z, by artist, etc.
+            Toggle(isOn: favoritesBinding) {
+                Label("Favorites", systemImage: "heart")
+            }
+            Divider()
             Picker("View", selection: viewBinding) {
                 ForEach(LibraryView.allCases, id: \.self) { view in
                     Label(view.label, systemImage: view.symbol).tag(view)
@@ -959,9 +976,9 @@ struct PlayerWindow: View {
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
-            Image(systemName: controller.library.view.symbol)
+            Image(systemName: controller.favorites.filterActive ? "heart.fill" : controller.library.view.symbol)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(controller.favorites.filterActive ? Theme.favorite : .white.opacity(0.6))
                 .frame(width: 22, height: 22).contentShape(Rectangle())
         }
         // Render the menu as a button so it can take PressableButtonStyle and grow
@@ -980,6 +997,11 @@ struct PlayerWindow: View {
         // takes seconds. Snap to the new order instead — it's instant.
         Binding(get: { controller.library.view },
                 set: { new in controller.library.setView(new) })
+    }
+
+    private var favoritesBinding: Binding<Bool> {
+        Binding(get: { controller.favorites.filterActive },
+                set: { on in controller.favorites.setFilter(on) })
     }
 
     // MARK: Artist sections
@@ -1430,9 +1452,18 @@ struct PlayerWindow: View {
     /// (cheap, always fresh). Otherwise the precomputed `searchResults`, filled
     /// by the debounced, off-main task — never fuzzy-ranked inside `body`.
     private var filteredTracks: [Track] {
-        searchText.trimmingCharacters(in: .whitespaces).isEmpty
+        let base = searchText.trimmingCharacters(in: .whitespaces).isEmpty
             ? controller.library.tracks
             : searchResults
+        guard controller.favorites.filterActive else { return base }
+        return base.filter { controller.favorites.isFavorite($0.url.path) }
+    }
+
+    /// The scope a library tap plays in. With the favorites filter on, playback
+    /// walks the visible favorites (so next/previous stay within them); otherwise
+    /// nil lets `play()` default to the whole library.
+    private var libraryPlaybackScope: [Track]? {
+        controller.favorites.filterActive ? filteredTracks : nil
     }
 
     /// Fuzzy-rank a (non-empty) query against the library. Static & pure so it can

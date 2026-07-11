@@ -39,6 +39,22 @@ final class Preferences {
         case volume, eqGains, eqEnabled, shuffle, repeatMode
         case themeName, albumTheme, lastTrack, lastPosition, musicFolderBookmark
         case libraryOrder, librarySort, playlists
+        case favorites, favoritesFilter
+    }
+
+    /// Favorited tracks — file paths, the same "currency" as `libraryOrder` and
+    /// playlists. Unordered in spirit (stored as an array only because
+    /// UserDefaults has no Set); missing files are simply ignored on lookup.
+    var favorites: [String] {
+        get { defaults.array(forKey: Key.favorites.rawValue) as? [String] ?? [] }
+        set { defaults.set(newValue, forKey: Key.favorites.rawValue) }
+    }
+
+    /// Whether the library list is currently filtered to favorites only. Persisted
+    /// so the filter survives relaunch, like the browse `libraryView`.
+    var favoritesFilter: Bool {
+        get { defaults.bool(forKey: Key.favoritesFilter.rawValue) }
+        set { defaults.set(newValue, forKey: Key.favoritesFilter.rawValue) }
     }
 
     /// Manual library order — file paths in the order the user arranged them.

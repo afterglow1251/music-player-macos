@@ -31,6 +31,7 @@ final class PlayerController: ObservableObject {
     let engine = AudioEngine()
     let library = MusicLibrary()
     let playlists = PlaylistStore()
+    let favorites = FavoritesStore()
     let downloader = Downloader()
     let lyrics = LyricsController()
     private let nowPlaying = NowPlayingController()
@@ -117,8 +118,8 @@ final class PlayerController: ObservableObject {
 
         // Re-publish child changes so the view updates.
         for child in [engine.objectWillChange, library.objectWillChange,
-                      playlists.objectWillChange, downloader.objectWillChange,
-                      lyrics.objectWillChange] {
+                      playlists.objectWillChange, favorites.objectWillChange,
+                      downloader.objectWillChange, lyrics.objectWillChange] {
             child.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         }
 
@@ -294,6 +295,12 @@ final class PlayerController: ObservableObject {
     }
 
     func clearQueue() { queue.removeAll() }
+
+    // MARK: Favorites
+
+    func isFavorite(_ track: Track) -> Bool { favorites.isFavorite(track.url.path) }
+
+    func toggleFavorite(_ track: Track) { favorites.toggle(track.url.path) }
 
     // MARK: Playlists
 
