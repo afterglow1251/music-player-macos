@@ -9,6 +9,23 @@ final class MainWindowVisibility: ObservableObject {
     @Published var isFrontmost = false
 }
 
+/// An `NSPanel` that always claims key appearance. The panel is deliberately
+/// never made key (see `togglePanel` — becoming key blinks the status-button
+/// highlight), but the AppKit-backed `Slider` then draws its fill in the
+/// inactive gray regardless of `.tint`. NSCell decides active-vs-inactive
+/// drawing by asking the window's key-APPEARANCE accessors — not
+/// `isKeyWindow`, which alone has no effect on the slider. Those accessors
+/// are private, so they're shadowed via matching `@objc` selectors rather
+/// than `override`; all three variants are covered because different NSCell
+/// paths consult different ones (the same trio Firefox's cell-drawing window
+/// overrides, see MOZCellDrawWindow in nsNativeThemeCocoa.mm).
+private final class KeyAppearancePanel: NSPanel {
+    override var isKeyWindow: Bool { true }
+    @objc(hasKeyAppearance) var hasKeyAppearance: Bool { true }
+    @objc(_hasKeyAppearance) var shadowHasKeyAppearance: Bool { true }
+    @objc(_hasActiveAppearance) var shadowHasActiveAppearance: Bool { true }
+}
+
 /// A menu-bar presence for Sonar: a status-bar button that reflects play state and
 /// pops a compact now-playing panel with transport controls — so you can steer
 /// playback without leaving whatever app you're in.
@@ -23,7 +40,7 @@ final class MenuBarController {
     private var isPanelOpen = false
 
     private lazy var panel: NSPanel = {
-        let p = NSPanel(
+        let p = KeyAppearancePanel(
             contentRect: NSRect(x: 0, y: 0, width: 268, height: 150),
             styleMask: [.fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
@@ -52,6 +69,14 @@ final class MenuBarController {
                 self?.dismiss()
                 Self.showMainWindow()
             }
+            // The panel is non-activating so it never becomes key, and SwiftUI
+            // then renders its controls in the inactive style — the seek Slider's
+            // fill goes gray instead of accent green. Forcing the control-active
+            // environment makes controls draw as if the window were key. On
+            // macOS 14+ the active style is keyed off `appearsActive`;
+            // `controlActiveState` is kept for the deprecated readers.
+            .environment(\.appearsActive, true)
+            .environment(\.controlActiveState, .key)
         )
         p.contentViewController = hosting
 
@@ -243,8 +268,8 @@ final class MenuBarController {
             panel.orderFrontRegardless()
             // NOTE: deliberately NOT making the panel key. Becoming key triggers a
             // key-window change that redraws the status button mid-click and blinks
-            // its highlight OFF for a frame. The seek bar draws its own accent fill
-            // (see MiniScrubber), so it doesn't need the window to be key.
+            // its highlight OFF for a frame. The native seek Slider still draws in
+            // its active style because KeyAppearancePanel reports itself as key.
             isPanelOpen = true
             setOpenIndication(true)
             installClickMonitor()
@@ -376,24 +401,23 @@ private struct MiniPlayerView: View {
 
     private var progress: some View {
         VStack(spacing: 3) {
-            // Custom-drawn scrubber rather than a native Slider: the panel is a
-            // non-key window, and AppKit draws a native slider's fill in the gray
-            // inactive style there. Making the panel key fixes the color but
-            // triggers a key-window change that blinks the status button's
-            // highlight. Drawing the fill ourselves needs neither.
-            MiniScrubber(
-                time: isScrubbing ? scrubTime : clock.currentTime,
-                duration: clock.duration,
-                accent: accent,
-                onScrub: { t in
-                    isScrubbing = true
-                    scrubTime = t
-                },
-                onCommit: { t in
-                    isScrubbing = false
-                    engine.seek(to: t)
+            // Native slider, matching the main window's seek bar and the EQ/volume
+            // sliders. `.tint(accent)` keeps the fill green even though the panel is
+            // a non-key window.
+            Slider(
+                value: Binding(
+                    get: { isScrubbing ? scrubTime : clock.currentTime },
+                    set: { scrubTime = $0 }
+                ),
+                in: 0...max(clock.duration, 0.01),
+                onEditingChanged: { editing in
+                    isScrubbing = editing
+                    if !editing { engine.seek(to: scrubTime) }
                 }
             )
+            .controlSize(.mini)
+            .tint(accent)
+            .disabled(clock.duration <= 0)
             HStack {
                 Text(Self.time(clock.currentTime)).font(.system(size: 9, design: .monospaced))
                 Spacer()
@@ -442,56 +466,6 @@ private struct VisualEffect: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
-/// A slim seek bar drawn in SwiftUI, styled after the small native slider:
-/// capsule track, accent-colored fill, round white knob. Drawn by hand so the
-/// fill keeps its accent color inside the non-key panel (a native Slider there
-/// renders its fill in the inactive gray).
-private struct MiniScrubber: View {
-    let time: TimeInterval
-    let duration: TimeInterval
-    let accent: Color
-    let onScrub: (TimeInterval) -> Void
-    let onCommit: (TimeInterval) -> Void
-
-    private static let knobSize: CGFloat = 11
-    private static let trackHeight: CGFloat = 3
-
-    var body: some View {
-        GeometryReader { geo in
-            let fraction = duration > 0 ? CGFloat(min(max(time / duration, 0), 1)) : 0
-            let knobX = (geo.size.width - Self.knobSize) * fraction
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.white.opacity(0.22))
-                    .frame(height: Self.trackHeight)
-                Capsule()
-                    .fill(accent)
-                    .frame(width: knobX + Self.knobSize / 2, height: Self.trackHeight)
-                Circle()
-                    .fill(.white)
-                    .frame(width: Self.knobSize, height: Self.knobSize)
-                    .shadow(color: .black.opacity(0.35), radius: 1, y: 0.5)
-                    .offset(x: knobX)
-            }
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in onScrub(timeAt(value.location.x, width: geo.size.width)) }
-                    .onEnded { value in onCommit(timeAt(value.location.x, width: geo.size.width)) }
-            )
-        }
-        .frame(height: 14)
-        .opacity(duration > 0 ? 1 : 0.4)
-        .allowsHitTesting(duration > 0)
-    }
-
-    private func timeAt(_ x: CGFloat, width: CGFloat) -> TimeInterval {
-        guard width > 0, duration > 0 else { return 0 }
-        return TimeInterval(min(max(x / width, 0), 1)) * duration
-    }
 }
 
 /// A button that dims (and dips) while held — the way native controls respond.
