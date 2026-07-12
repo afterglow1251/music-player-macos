@@ -84,16 +84,27 @@ struct PlayerWindow: View {
         .onChange(of: controller.currentTrack?.artworkData) { _, _ in
             decodeArtwork(controller.currentTrack)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+        // Swap to the fullscreen layout at the *start* of the native animation
+        // (will…, not did…), so the two-column layout and its blurred backdrop grow
+        // together with the window — instead of the small windowed column floating
+        // in a growing black void and then popping into place once the animation ends.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             isFullscreen = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
+        // …and swap back to the windowed layout at the *start* of the exit animation
+        // too, so the shrinking window never shows the two-column fullscreen layout
+        // crammed (and cover-clipped) into a half-size frame. The normal single column
+        // rides the shrink down instead.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { _ in
             isFullscreen = false
-            // Leaving fullscreen, the resizable window keeps its huge frame — snap
-            // it back to the content's natural size so there are no black margins.
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
+            // Once windowed again, snap the frame to the fixed-width content's natural
+            // size so there are no leftover black margins around it. `normalContent`
+            // has been laid out for the whole shrink (swapped in at willExit), so its
+            // fittingSize is already correct — no settling delay needed.
             guard let window = note.object as? NSWindow else { return }
             Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(60))
                 if let content = window.contentView {
                     let fit = content.fittingSize
                     if fit.width > 100, fit.height > 100 { window.setContentSize(fit) }
