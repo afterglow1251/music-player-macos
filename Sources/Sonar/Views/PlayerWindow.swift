@@ -11,6 +11,8 @@ struct PlayerWindow: View {
     @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
     @State private var currentRowVisible = false     // is the playing row within the list viewport
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
+    @State private var selectedTrackID: Track.ID?    // keyboard-navigation cursor in the track list
+    @FocusState private var listFocused: Bool        // list has key focus → ↑/↓ navigate (not volume)
     @State private var muteHovering = false           // mute button hover (driven by its AppKit catcher)
     @State private var visualizerMode: VisualizerMode = .spectrum
     @State private var isScrubbing = false
@@ -170,8 +172,8 @@ struct PlayerWindow: View {
                 Group {
                     Button("") { controller.seekBy(-10) }.keyboardShortcut(.leftArrow, modifiers: [])
                     Button("") { controller.seekBy(10) }.keyboardShortcut(.rightArrow, modifiers: [])
-                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: [])
-                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: [])
+                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: []).disabled(listFocused)
+                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: []).disabled(listFocused)
                 }
                 .hidden()
             }
@@ -251,8 +253,8 @@ struct PlayerWindow: View {
                 Group {
                     Button("") { controller.seekBy(-10) }.keyboardShortcut(.leftArrow, modifiers: [])
                     Button("") { controller.seekBy(10) }.keyboardShortcut(.rightArrow, modifiers: [])
-                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: [])
-                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: [])
+                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: []).disabled(listFocused)
+                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: []).disabled(listFocused)
                 }
                 .hidden()
             }
@@ -697,6 +699,55 @@ struct PlayerWindow: View {
         scrollToCurrentNonce += 1
     }
 
+    // MARK: Keyboard navigation
+
+    /// The tracks the list currently shows, in on-screen order — what ↑/↓ walks.
+    /// Mirrors the render: a selected playlist, the collapsible artist sections
+    /// (skipping collapsed groups), or the flat/filtered library.
+    private var navigableTracks: [Track] {
+        if selectedPlaylist != nil { return playlistTracks }
+        if controller.library.view == .artist && searchText.isEmpty {
+            return artistSections.flatMap { collapsedGroups.contains($0.id) ? [] : $0.tracks }
+        }
+        return filteredTracks
+    }
+
+    /// Move the keyboard cursor by `delta`, seeding at the playing row (if shown)
+    /// or an end when nothing is selected yet.
+    private func moveSelection(by delta: Int) {
+        let tracks = navigableTracks
+        guard !tracks.isEmpty else { return }
+        let index: Int
+        if let id = selectedTrackID, let i = tracks.firstIndex(where: { $0.id == id }) {
+            index = min(max(i + delta, 0), tracks.count - 1)
+        } else if let current = controller.currentTrack?.id,
+                  let i = tracks.firstIndex(where: { $0.id == current }) {
+            index = i
+        } else {
+            index = delta > 0 ? 0 : tracks.count - 1
+        }
+        selectedTrackID = tracks[index].id
+    }
+
+    /// Play the row under the cursor, in the scope matching the current source.
+    private func playSelectedTrack() {
+        guard let id = selectedTrackID,
+              let track = navigableTracks.first(where: { $0.id == id }) else { return }
+        if selectedPlaylist != nil {
+            controller.play(track, in: playlistTracks)
+        } else {
+            controller.play(track, in: libraryPlaybackScope)
+        }
+    }
+
+    /// A row click both plays the track and drops the cursor on it, focusing the
+    /// list so ↑/↓ continue from there.
+    private func selectAndPlay(_ track: Track, in scope: [Track]?) {
+        selectedTrackID = track.id
+        listFocused = true
+        controller.play(track, in: scope)
+    }
+
     /// A zero-size marker placed behind the currently-playing row: it emits whether
     /// that row sits inside the list viewport (a Bool, so it only flips at the edge —
     /// see CurrentRowVisibleKey). Absent for non-current rows, so an off-screen
@@ -1027,6 +1078,21 @@ struct PlayerWindow: View {
                 .background(OverlayScrollerStyle())
             }
             .coordinateSpace(.named("libScroll"))
+            // Keyboard navigation: when the list holds focus, ↑/↓ walk the cursor
+            // and ↩ plays it. The volume ↑/↓ shortcuts are disabled while focused
+            // (see their .disabled(listFocused)), so the arrows reach onMoveCommand.
+            .focusable()
+            .focusEffectDisabled()
+            .focused($listFocused)
+            .onMoveCommand { direction in
+                switch direction {
+                case .up: moveSelection(by: -1)
+                case .down: moveSelection(by: 1)
+                default: break
+                }
+            }
+            .onKeyPress(.return) { playSelectedTrack(); return .handled }
+            .onKeyPress(.escape) { listFocused = false; return .handled }
             .frame(height: fixedHeight)
             .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
             // Measure the viewport height so a row can tell whether it's on screen.
@@ -1046,6 +1112,12 @@ struct PlayerWindow: View {
                     withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: .center) }
                 }
             }
+            // Keep the keyboard cursor on screen — minimal scroll (nil anchor)
+            // reveals a just-off-edge row without recentring the whole list.
+            .onChange(of: selectedTrackID) { _, id in
+                guard let id, listFocused else { return }
+                withAnimation(.easeInOut(duration: 0.12)) { proxy.scrollTo(id) }
+            }
         }
     }
 
@@ -1057,8 +1129,9 @@ struct PlayerWindow: View {
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
+            isSelected: selectedTrackID == track.id,
             durationText: timeString(track.duration),
-            onTap: { controller.play(track, in: libraryPlaybackScope) },
+            onTap: { selectAndPlay(track, in: libraryPlaybackScope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },
@@ -1091,8 +1164,9 @@ struct PlayerWindow: View {
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
+            isSelected: selectedTrackID == track.id,
             durationText: timeString(track.duration),
-            onTap: { controller.play(track, in: scope) },
+            onTap: { selectAndPlay(track, in: scope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },

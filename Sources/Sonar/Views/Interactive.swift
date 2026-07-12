@@ -288,6 +288,9 @@ struct TrackRowView: View {
     let track: Track
     let isCurrent: Bool
     let isPlaying: Bool
+    /// Keyboard-navigation cursor: this row sits under the ↑/↓ selection. Drawn as
+    /// an accent outline, distinct from the filled `isCurrent` (now-playing) row.
+    var isSelected: Bool = false
     let durationText: String
     let onTap: () -> Void
     let onPlayNext: () -> Void
@@ -399,6 +402,13 @@ struct TrackRowView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(background))
+        .overlay(
+            // Only the keyboard cursor draws the outline, and never on the playing
+            // row (its accent fill already marks it) — so a plain click, which just
+            // starts the track, shows no border.
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(isSelected && !isCurrent ? accent.opacity(0.55) : .clear, lineWidth: 1.5)
+        )
         .scaleEffect(isDragging ? 1.02 : 1)
         .shadow(color: isDragging ? .black.opacity(0.45) : .clear,
                 radius: isDragging ? 8 : 0, y: isDragging ? 4 : 0)
@@ -460,6 +470,7 @@ struct TrackRowView: View {
     private var background: Color {
         if isDragging { return Color(white: 0.16) }
         if isCurrent { return accent.opacity(0.16) }
+        if isSelected { return .white.opacity(0.10) }
         return hovering ? .white.opacity(0.07) : .clear
     }
 }
