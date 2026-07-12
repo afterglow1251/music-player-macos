@@ -17,9 +17,19 @@ enum LyricsProvider {
 
     /// Fetch synced lyrics for a track, or nil if none are available.
     static func fetch(for track: Track) async -> [LyricLine]? {
-        if let local = loadCache(for: track.url) {
-            return local
-        }
+        if let local = cached(for: track) { return local }
+        return await fetchRemote(for: track)
+    }
+
+    /// Synchronous cache-only lookup — a fast local `.lrc` read, no network. Lets a
+    /// caller show cached lyrics instantly (no loading spinner) and reserve the async
+    /// network path for an actual cache miss.
+    static func cached(for track: Track) -> [LyricLine]? {
+        loadCache(for: track.url)
+    }
+
+    /// Network lookup (LRCLIB) for a cache miss; caches the result on a hit.
+    static func fetchRemote(for track: Track) async -> [LyricLine]? {
         guard let lines = await fetchFromLRCLIB(track) else { return nil }
         writeCache(lines.raw, for: track.url)
         return lines.parsed

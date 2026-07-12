@@ -37,7 +37,13 @@ struct LyricsView: View {
         case .unavailable:
             status("No synced lyrics found")
         case .loaded:
+            // Identity tied to the loaded lyrics themselves (each fetch makes fresh
+            // LyricLine ids), so the scroller is rebuilt exactly when the text changes
+            // to a new song — refreshing the lines and re-running its onAppear to
+            // recenter/reset the scroll. Previously the loading-state flash recreated
+            // it as a side effect; this does it deliberately, without the flash.
             scroller
+                .id(controller.lyrics.lines.first?.id)
         }
     }
 
