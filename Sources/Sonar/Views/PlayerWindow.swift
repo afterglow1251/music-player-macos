@@ -714,15 +714,17 @@ struct PlayerWindow: View {
 
     /// Compact "Now playing" pill in the library header, shown only while the current
     /// track is scrolled out of view; tapping it glides the list back to the track.
+    /// Kept deliberately quiet — a translucent accent chip rather than a solid fill —
+    /// so it reads as an offer, not a demand, in the muted header.
     private var nowPlayingPill: some View {
         Button { goToCurrentTrack() } label: {
             HStack(spacing: 4) {
                 Image(systemName: "music.note").font(.system(size: 10, weight: .bold))
                 Text("Now playing").font(.system(size: 11, weight: .medium))
             }
-            .foregroundStyle(.black)
+            .foregroundStyle(accent)
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Capsule().fill(accent))
+            .background(Capsule().fill(accent.opacity(0.15)))
             .fixedSize()
         }
         .buttonStyle(PressableButtonStyle())
