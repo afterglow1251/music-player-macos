@@ -1572,13 +1572,26 @@ struct PlayerWindow: View {
 
     private func openFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.audio, .mp3, .mpeg4Audio, .wav, .aiff]
-        panel.allowsMultipleSelection = false
+        var contentTypes: [UTType] = [.audio, .mp3, .mpeg4Audio, .wav, .aiff]
+        if let flac = UTType(filenameExtension: "flac") {
+            contentTypes.append(flac)
+        }
+        panel.allowedContentTypes = contentTypes
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        if panel.runModal() == .OK, let url = panel.url {
-            Task {
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
+        Task {
+            var firstTrack: Track?
+            for url in urls {
                 let track = await controller.library.add(url)
-                controller.play(track)
+                if firstTrack == nil { firstTrack = track }
+            }
+            // A single chosen file plays immediately, matching the previous
+            // behavior. Importing several files just adds them to the
+            // library — don't hijack whatever is currently playing.
+            if urls.count == 1, let firstTrack {
+                controller.play(firstTrack)
             }
         }
     }
