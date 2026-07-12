@@ -49,7 +49,7 @@ final class PlayerController: ObservableObject {
     /// stable id so the same track can appear twice and drag-reorder stays smooth.
     @Published private(set) var queue: [QueueItem] = []
 
-    @Published var shuffle = false { didSet { save() } }
+    @Published var shuffle = false { didSet { resetShuffle(); save() } }
     @Published var repeatMode: RepeatMode = .off { didSet { save() } }
     @Published var themeIndex = 0 { didSet { save() } }
 
@@ -179,6 +179,13 @@ final class PlayerController: ObservableObject {
     /// sets it to that group's tracks; a plain library tap resets it to the library.
     private var scope: [Track] = []
 
+    // Real shuffle state: a "bag" (every track plays once before any repeat) and a
+    // history of what actually played (so ⏮/⏭ step through it rather than re-roll).
+    private var shuffleBag: [Track] = []       // upcoming this cycle, pre-shuffled
+    private var shuffleHistory: [Track] = []   // played order
+    private var shuffleCursor = -1             // index in shuffleHistory of the current track
+    private var shuffleUniverse: [Track] = []  // the list the bag was built from
+
     /// Tracks that next/previous walk through: the active scope if it still holds
     /// the current track, otherwise the whole library.
     private var activeScope: [Track] {
@@ -186,8 +193,10 @@ final class PlayerController: ObservableObject {
     }
 
     func play(_ track: Track, in scope: [Track]? = nil) {
-        self.scope = scope ?? library.tracks
+        let list = scope ?? library.tracks
+        self.scope = list
         currentTrack = track
+        syncShuffleHistory(playing: track, in: list)
         engine.load(url: track.url)
         updateNowPlaying()
         save()
@@ -223,8 +232,8 @@ final class PlayerController: ObservableObject {
         case .play(let track, let scope, let fromQueue):
             if fromQueue { queue.removeFirst(); play(track) }   // queue plays in the library scope
             else { play(track, in: scope) }
-        case .playRandom(let list, let excluding, _):
-            play(randomTrack(in: list, excluding: excluding), in: list)
+        case .playRandom(let list, _, _):
+            play(nextShuffleTrack(in: list), in: list)
         }
     }
 
@@ -233,8 +242,9 @@ final class PlayerController: ObservableObject {
         switch PlaybackSequencer.previousDecision(current: currentTrack, activeScope: activeScope, shuffle: shuffle) {
         case .play(let track, let scope, _):
             play(track, in: scope)
-        case .playRandom(let list, let excluding, _):
-            play(randomTrack(in: list, excluding: excluding), in: list)
+        case .playRandom(let list, _, _):
+            if let prev = previousShuffleTrack() { play(prev, in: list) }
+            else { engine.seek(to: 0) }   // at the start of shuffle history → restart current
         case .none, .stopForSleep, .stopAtEnd:
             return
         }
@@ -330,11 +340,68 @@ final class PlayerController: ObservableObject {
         return playlist
     }
 
-    private func randomTrack(in list: [Track], excluding index: Int) -> Track {
-        guard list.count > 1 else { return list[index] }
-        var i = index
-        while i == index { i = Int.random(in: 0..<list.count) }
-        return list[i]
+    // MARK: Shuffle bag + history
+
+    /// Next track under shuffle: walk forward through history if the user had
+    /// stepped back, otherwise draw the next from the bag (refilling+reshuffling it
+    /// when empty, so every track plays once before any repeat).
+    private func nextShuffleTrack(in list: [Track]) -> Track {
+        reseedShuffleIfNeeded(for: list)
+        if shuffleCursor >= 0, shuffleCursor + 1 < shuffleHistory.count {
+            shuffleCursor += 1                       // ⏮ then ⏭ → forward through history
+            return shuffleHistory[shuffleCursor]
+        }
+        if shuffleBag.isEmpty { refillShuffleBag(avoiding: currentTrack) }
+        let track = shuffleBag.popLast() ?? currentTrack ?? list[0]
+        shuffleHistory.append(track)
+        shuffleCursor = shuffleHistory.count - 1
+        return track
+    }
+
+    /// Previous track under shuffle — step back through the played history. nil at
+    /// the start of history (the caller restarts the current track instead).
+    private func previousShuffleTrack() -> Track? {
+        guard shuffleCursor > 0 else { return nil }
+        shuffleCursor -= 1
+        return shuffleHistory[shuffleCursor]
+    }
+
+    /// Keep the shuffle history/bag consistent with whatever actually starts
+    /// playing. The navigator's own picks are already recorded (a no-op here); a
+    /// manual pick / queue / group jump reseeds the history so ⏮ and the bag
+    /// continue from the new track.
+    private func syncShuffleHistory(playing track: Track, in list: [Track]) {
+        guard shuffle else { return }
+        if shuffleUniverse == list, shuffleCursor >= 0, shuffleCursor < shuffleHistory.count,
+           shuffleHistory[shuffleCursor] == track {
+            return
+        }
+        shuffleUniverse = list
+        shuffleHistory = [track]
+        shuffleCursor = 0
+        refillShuffleBag(avoiding: track)
+    }
+
+    /// Rebuild the bag/history when the shuffle universe (the list we walk) changes
+    /// — e.g. switching from the library to a playlist.
+    private func reseedShuffleIfNeeded(for list: [Track]) {
+        guard shuffleUniverse != list else { return }
+        shuffleUniverse = list
+        shuffleHistory = currentTrack.map { [$0] } ?? []
+        shuffleCursor = shuffleHistory.count - 1
+        refillShuffleBag(avoiding: currentTrack)
+    }
+
+    private func refillShuffleBag(avoiding: Track?) {
+        shuffleBag = shuffleUniverse.filter { $0 != avoiding }.shuffled()
+    }
+
+    /// Drop all shuffle memory — toggling shuffle re-seeds from the next play.
+    private func resetShuffle() {
+        shuffleBag = []
+        shuffleHistory = []
+        shuffleCursor = -1
+        shuffleUniverse = []
     }
 
     // MARK: EQ
