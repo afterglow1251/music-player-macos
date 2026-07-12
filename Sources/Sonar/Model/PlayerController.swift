@@ -513,31 +513,45 @@ final class PlayerController: ObservableObject {
 
     @Published private(set) var sleepMode: SleepMode = .off
     @Published private(set) var sleepRemaining: TimeInterval?  // seconds left (timer mode)
-    private var sleepTimer: Timer?
+    private var sleepEndDate: Date?
+    private var sleepStopTimer: Timer?     // single precise fire that performs the stop
+    private var sleepDisplayTimer: Timer?  // 1 Hz UI-only tick; recomputes sleepRemaining from sleepEndDate
 
     func setSleep(_ mode: SleepMode) {
-        sleepTimer?.invalidate()
-        sleepTimer = nil
+        sleepStopTimer?.invalidate()
+        sleepStopTimer = nil
+        sleepDisplayTimer?.invalidate()
+        sleepDisplayTimer = nil
+        sleepEndDate = nil
         sleepMode = mode
         switch mode {
         case .off, .endOfTrack:
             sleepRemaining = nil
         case .timer(let minutes):
-            sleepRemaining = TimeInterval(max(1, minutes) * 60)
-            sleepTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.tickSleep() }
+            let interval = TimeInterval(max(1, minutes) * 60)
+            let endDate = Date().addingTimeInterval(interval)
+            sleepEndDate = endDate
+            sleepRemaining = interval
+
+            let stopTimer = Timer(fire: endDate, interval: 0, repeats: false) { [weak self] _ in
+                Task { @MainActor in self?.fireSleepStop() }
+            }
+            RunLoop.main.add(stopTimer, forMode: .common)
+            sleepStopTimer = stopTimer
+
+            sleepDisplayTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.tickSleepDisplay() }
             }
         }
     }
 
-    private func tickSleep() {
-        guard let remaining = sleepRemaining else { return }
-        let next = remaining - 1
-        if next <= 0 {
-            engine.pause()
-            setSleep(.off)
-        } else {
-            sleepRemaining = next
-        }
+    private func tickSleepDisplay() {
+        guard let endDate = sleepEndDate else { return }
+        sleepRemaining = max(0, endDate.timeIntervalSinceNow)
+    }
+
+    private func fireSleepStop() {
+        engine.pause()
+        setSleep(.off)
     }
 }
