@@ -216,27 +216,49 @@ struct TrackRowView: View {
                 }
             }
             Spacer(minLength: 4)
-            // On hover show a trash button; otherwise the duration. Both live in a
-            // fixed-width slot so nothing shifts; the button scales around its own
-            // (small, centered) frame so it grows in place instead of drifting.
-            // Duration and the hover controls are both always in the layout (only
-            // their opacity changes), so nothing structurally appears/moves during
-            // a fast reorder — which was making the drag handle "fly" away.
-            ZStack(alignment: .trailing) {
-                // Resting: the duration, prefixed by a small heart when favorited so
-                // a favorite is spottable at a glance without hovering.
-                HStack(spacing: 5) {
-                    if isFavorite {
-                        Image(systemName: "heart.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(Theme.favorite)
+            // Trailing controls as fixed columns so nothing shifts between rest and
+            // hover. The heart holds its own column and never moves — at rest a faint
+            // favorite indicator, on hover a live toggle, but always at the same x.
+            // The trailing column cross-fades three things in one fixed box: the
+            // duration (flush-right at rest), the trash (tucked in beside the heart
+            // on hover), and — when the list is manually reorderable — the drag
+            // handle pinned to the far corner, so hover fills the same right edge the
+            // duration held instead of leaving a hole there.
+            HStack(spacing: 3) {
+                if let onToggleFavorite {
+                    Button(action: onToggleFavorite) {
+                        Image(systemName: isFavorite ? "heart.fill" : "heart")
+                            .font(.system(size: 11))
+                            .foregroundStyle(isFavorite ? Theme.favorite : .white.opacity(0.6))
+                            .frame(width: 18, height: 20)
                     }
+                    .buttonStyle(PressableButtonStyle())
+                    .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
+                    .opacity(isFavorite || hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
+                }
+                // Wide enough for long-mix durations (e.g. "84:36") on one line, and
+                // to keep the corner-pinned drag handle clear of the trash.
+                ZStack {
                     Text(durationText)
                         .font(.system(size: 10, design: .rounded))
                         .foregroundStyle(.white.opacity(0.4))
-                }
-                .opacity(hovering ? 0 : 1)
-                HStack(spacing: 8) {
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .opacity(hovering ? 0 : 1)
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red.opacity(0.9))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .help("Delete (move to Trash)")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
+                    // Drag handle — pinned to the far corner (where the duration
+                    // rests), revealed on hover only while the list is reorderable.
                     if reorderID != nil {
                         DragDots()
                             .foregroundStyle(.white.opacity(0.55))
@@ -248,30 +270,13 @@ struct TrackRowView: View {
                                     .onEnded { _ in onReorderEnded() }
                             )
                             .help("Drag to reorder")
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .opacity(hovering ? 1 : 0)
+                            .allowsHitTesting(hovering)
                     }
-                    if let onToggleFavorite {
-                        Button(action: onToggleFavorite) {
-                            Image(systemName: isFavorite ? "heart.fill" : "heart")
-                                .font(.system(size: 11))
-                                .foregroundStyle(isFavorite ? Theme.favorite : .white.opacity(0.6))
-                                .frame(width: 22, height: 20)
-                        }
-                        .buttonStyle(PressableButtonStyle())
-                        .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
-                    }
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.red.opacity(0.9))
-                            .frame(width: 22, height: 20)
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    .help("Delete (move to Trash)")
                 }
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
+                .frame(width: 40)
             }
-            .frame(width: controlSlotWidth, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -318,18 +323,6 @@ struct TrackRowView: View {
             Button("Delete", role: .destructive, action: onDelete)
         }
         .animation(.easeOut(duration: 0.12), value: hovering)
-    }
-
-    /// Fixed width for the trailing slot, sized so the hover controls (heart, trash,
-    /// and the optional drag handle) never shift the row's layout. Kept in one place
-    /// so adding/removing a control is a single edit.
-    private var controlSlotWidth: CGFloat {
-        switch (onToggleFavorite != nil, reorderID != nil) {
-        case (false, false): return 44
-        case (false, true):  return 58
-        case (true, false):  return 58
-        case (true, true):   return 74
-        }
     }
 
     private var background: Color {
