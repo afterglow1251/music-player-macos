@@ -115,9 +115,21 @@ final class MusicLibrary: ObservableObject {
     }
 
     /// Move a track's file to the Trash and drop it from the library.
-    func delete(_ track: Track) {
-        try? FileManager.default.trashItem(at: track.url, resultingItemURL: nil)
+    /// Only removes the track when the Trash actually succeeds — a file
+    /// that's already missing on disk is treated as gone too. Returns
+    /// `true` if the track was removed, `false` if it was kept because the
+    /// Trash failed (in which case the caller should surface the error).
+    @discardableResult
+    func delete(_ track: Track) -> Bool {
+        do {
+            try FileManager.default.trashItem(at: track.url, resultingItemURL: nil)
+        } catch {
+            guard !FileManager.default.fileExists(atPath: track.url.path) else {
+                return false
+            }
+        }
         tracks.removeAll { $0 == track }
+        return true
     }
 
     /// Change the library folder: move existing tracks there, then re-scan/watch.

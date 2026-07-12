@@ -267,13 +267,16 @@ final class PlayerController: ObservableObject {
     }
 
     func delete(_ track: Track) {
+        guard library.delete(track) else {
+            downloader.lastError = "Couldn't move \(track.title) to the Trash"
+            return
+        }
         if currentTrack == track {
             engine.stop()
             currentTrack = nil
             updateNowPlaying()
         }
         queue.removeAll { $0.track == track }
-        library.delete(track)
     }
 
     // MARK: Queue
