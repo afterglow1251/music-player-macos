@@ -79,6 +79,17 @@ private struct TooltipModifier: ViewModifier {
                     withAnimation(.easeOut(duration: 0.1)) { show = false }
                 }
             }
+            // Once a button opens a Menu, AppKit enters menu-tracking mode and
+            // SwiftUI stops delivering hover-out events, so `show` would otherwise
+            // stay true and the tooltip lingers under/around the open menu. Force
+            // it closed as soon as any menu starts tracking (and on app resign-
+            // active, for the same reason).
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
+                dismiss()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                dismiss()
+            }
             .overlay(alignment: .top) {
                 if show {
                     TooltipLabel(text: text)
@@ -88,6 +99,11 @@ private struct TooltipModifier: ViewModifier {
                         .transition(.opacity)
                 }
             }
+    }
+
+    private func dismiss() {
+        delay?.cancel()
+        show = false
     }
 }
 
