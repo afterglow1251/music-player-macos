@@ -12,7 +12,9 @@ struct PlayerWindow: View {
     @State private var currentRowVisible = false     // is the playing row within the list viewport
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
     @State private var selectedTrackID: Track.ID?    // keyboard-navigation cursor in the track list
-    @FocusState private var listFocused: Bool        // list has key focus → ↑/↓ navigate (not volume)
+    @State private var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
+    private static let listBottomAnchorID = "nav-list-bottom"  // tail scroll anchor for the last row
+    private static let listTopAnchorID = "nav-list-top"        // head scroll anchor for the first row
     @State private var muteHovering = false           // mute button hover (driven by its AppKit catcher)
     @State private var visualizerMode: VisualizerMode = .spectrum
     @State private var isScrubbing = false
@@ -165,15 +167,20 @@ struct PlayerWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             controller.saveOnQuit()
         }
-        // Arrow keys: ← → seek ±10s, ↑ ↓ volume. Only active when no text field
-        // is focused, so arrows still edit text in the URL/search fields.
+        // Keyboard model (active only while no text field is focused, so fields
+        // keep their own keys): ↑/↓ walk the track-list cursor and ↩ plays it;
+        // ←/→ seek ±10s; ⌘↑/↓ volume. The list is the default owner of the bare
+        // arrows — no focus mode to enter or a cursor to re-acquire.
         .background {
-            if !urlFieldFocused && !searchFieldFocused {
+            if !urlFieldFocused && !searchFieldFocused && !renameFieldFocused {
                 Group {
                     Button("") { controller.seekBy(-10) }.keyboardShortcut(.leftArrow, modifiers: [])
                     Button("") { controller.seekBy(10) }.keyboardShortcut(.rightArrow, modifiers: [])
-                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: []).disabled(listFocused)
-                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: []).disabled(listFocused)
+                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: .command)
+                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: .command)
+                    Button("") { moveSelection(by: -1) }.keyboardShortcut(.upArrow, modifiers: [])
+                    Button("") { moveSelection(by: 1) }.keyboardShortcut(.downArrow, modifiers: [])
+                    Button("") { playSelectedTrack() }.keyboardShortcut(.return, modifiers: [])
                 }
                 .hidden()
             }
@@ -247,14 +254,18 @@ struct PlayerWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: .toggleSettings)) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
         }
-        // ← → seek ±10s, ↑ ↓ volume (space is handled by the play button itself).
+        // ←/→ seek ±10s, ⌘↑/↓ volume, ↑/↓ walk the track-list cursor + ↩ plays it
+        // (space is handled by the play button itself).
         .background {
-            if !urlFieldFocused && !searchFieldFocused {
+            if !urlFieldFocused && !searchFieldFocused && !renameFieldFocused {
                 Group {
                     Button("") { controller.seekBy(-10) }.keyboardShortcut(.leftArrow, modifiers: [])
                     Button("") { controller.seekBy(10) }.keyboardShortcut(.rightArrow, modifiers: [])
-                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: []).disabled(listFocused)
-                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: []).disabled(listFocused)
+                    Button("") { controller.adjustVolume(0.05) }.keyboardShortcut(.upArrow, modifiers: .command)
+                    Button("") { controller.adjustVolume(-0.05) }.keyboardShortcut(.downArrow, modifiers: .command)
+                    Button("") { moveSelection(by: -1) }.keyboardShortcut(.upArrow, modifiers: [])
+                    Button("") { moveSelection(by: 1) }.keyboardShortcut(.downArrow, modifiers: [])
+                    Button("") { playSelectedTrack() }.keyboardShortcut(.return, modifiers: [])
                 }
                 .hidden()
             }
@@ -727,6 +738,7 @@ struct PlayerWindow: View {
             index = delta > 0 ? 0 : tracks.count - 1
         }
         selectedTrackID = tracks[index].id
+        scrollToSelectionNonce += 1   // only keyboard nav scrolls; playback-follow doesn't
     }
 
     /// Play the row under the cursor, in the scope matching the current source.
@@ -740,11 +752,10 @@ struct PlayerWindow: View {
         }
     }
 
-    /// A row click both plays the track and drops the cursor on it, focusing the
-    /// list so ↑/↓ continue from there.
+    /// A row click both plays the track and drops the cursor on it, so ↑/↓
+    /// continue from there.
     private func selectAndPlay(_ track: Track, in scope: [Track]?) {
         selectedTrackID = track.id
-        listFocused = true
         controller.play(track, in: scope)
     }
 
@@ -1030,6 +1041,10 @@ struct PlayerWindow: View {
                             .padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 2)
                     }
 
+                    // Head anchor mirroring the tail one: navigating to the first
+                    // row scrolls here so its outline clears the top edge with
+                    // breathing room, sitting just below any queue.
+                    Color.clear.frame(height: 8).id(Self.listTopAnchorID)
                     if let playlist = selectedPlaylist {
                         if playlistTracks.isEmpty {
                             emptyMessage("This playlist is empty — right-click a library track to add it")
@@ -1070,6 +1085,10 @@ struct PlayerWindow: View {
                             }
                         }
                     }
+                    // Tail anchor: navigating to the last row scrolls to this
+                    // instead, so the whole content end clears the card edge and the
+                    // row's outline isn't cropped. Its height is the breathing gap.
+                    Color.clear.frame(height: 8).id(Self.listBottomAnchorID)
                 }
                 .padding(.horizontal, 6).padding(.vertical, 6)
                 .coordinateSpace(.named("reorder"))
@@ -1078,21 +1097,6 @@ struct PlayerWindow: View {
                 .background(OverlayScrollerStyle())
             }
             .coordinateSpace(.named("libScroll"))
-            // Keyboard navigation: when the list holds focus, ↑/↓ walk the cursor
-            // and ↩ plays it. The volume ↑/↓ shortcuts are disabled while focused
-            // (see their .disabled(listFocused)), so the arrows reach onMoveCommand.
-            .focusable()
-            .focusEffectDisabled()
-            .focused($listFocused)
-            .onMoveCommand { direction in
-                switch direction {
-                case .up: moveSelection(by: -1)
-                case .down: moveSelection(by: 1)
-                default: break
-                }
-            }
-            .onKeyPress(.return) { playSelectedTrack(); return .handled }
-            .onKeyPress(.escape) { listFocused = false; return .handled }
             .frame(height: fixedHeight)
             .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
             // Measure the viewport height so a row can tell whether it's on screen.
@@ -1104,6 +1108,13 @@ struct PlayerWindow: View {
                 }
             }
             .onPreferenceChange(CurrentRowVisibleKey.self) { currentRowVisible = $0 }
+            // Keep the cursor on the playing track: when playback advances (auto-
+            // advance, next/prev), move the selection to it so the outline never
+            // lingers on the previous row. No scroll here — the "Now playing" pill
+            // already offers a jump when the current track is off-screen.
+            .onChange(of: controller.currentTrack) { _, track in
+                selectedTrackID = track?.id
+            }
             .onChange(of: scrollToCurrentNonce) { _, _ in
                 guard let id = controller.currentTrack?.id else { return }
                 // Defer a runloop so anything we just cleared (search / filter) has
@@ -1114,9 +1125,36 @@ struct PlayerWindow: View {
             }
             // Keep the keyboard cursor on screen — minimal scroll (nil anchor)
             // reveals a just-off-edge row without recentring the whole list.
-            .onChange(of: selectedTrackID) { _, id in
-                guard let id, listFocused else { return }
-                withAnimation(.easeInOut(duration: 0.12)) { proxy.scrollTo(id) }
+            // Scroll only for keyboard navigation (nonce-driven), never when the
+            // cursor merely follows a track change — that would yank the list.
+            .onChange(of: scrollToSelectionNonce) { _, _ in
+                guard let id = selectedTrackID else { return }
+                let tracks = navigableTracks
+                if id == tracks.last?.id {
+                    // Animate like a middle-row step so the scroller fades the same
+                    // way at both edges; the completion re-snap covers lazy-layout
+                    // undershoot, keeping the anchor's breathing room reliable.
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            proxy.scrollTo(Self.listBottomAnchorID, anchor: .bottom)
+                        } completion: {
+                            proxy.scrollTo(Self.listBottomAnchorID, anchor: .bottom)
+                        }
+                    }
+                } else if id == tracks.first?.id {
+                    // Mirror the tail: animated step + completion re-snap to the
+                    // head anchor so the first row reaches the true top.
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            proxy.scrollTo(Self.listTopAnchorID, anchor: .top)
+                        } completion: {
+                            proxy.scrollTo(Self.listTopAnchorID, anchor: .top)
+                        }
+                    }
+                } else {
+                    // Middle rows: minimal scroll reveals a just-off-edge row.
+                    withAnimation(.easeInOut(duration: 0.12)) { proxy.scrollTo(id) }
+                }
             }
         }
     }
