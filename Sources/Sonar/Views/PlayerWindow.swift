@@ -11,6 +11,7 @@ struct PlayerWindow: View {
     @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
     @State private var currentRowVisible = false     // is the playing row within the list viewport
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
+    @State private var muteHovering = false           // mute button hover (driven by its AppKit catcher)
     @State private var visualizerMode: VisualizerMode = .spectrum
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
@@ -476,14 +477,25 @@ struct PlayerWindow: View {
         HStack(spacing: 8) {
             iconButton("folder", size: 13, help: "Open file") { openFile() }
             Spacer()
-            Button { engine.toggleMute() } label: {
-                Image(systemName: engine.isMuted ? "speaker.slash.fill" : "speaker.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(engine.isMuted ? .red.opacity(0.8) : .white.opacity(0.45))
-                    .frame(width: 18, height: 18)
-            }
-            .buttonStyle(PressableButtonStyle())
-            .tooltip(engine.isMuted ? "Unmute" : "Mute")
+            // A normal icon button like its neighbours (hover/press feedback), but
+            // with an AppKit click-catcher on top. The menu-bar player is a
+            // `.nonactivatingPanel`, which never becomes key from a plain button
+            // press, so a bare SwiftUI Button only fired after the volume NSSlider
+            // (which does take key) had been touched. FirstMouseButton owns the
+            // click and works without the panel being key.
+            Image(systemName: engine.isMuted ? "speaker.slash.fill" : "speaker.fill")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(engine.isMuted ? .red.opacity(0.85) : .white.opacity(0.85))
+                .brightness(muteHovering ? 0.10 : 0)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+                // Grow on hover to match the neighbouring buttons. The catcher on top
+                // eats the hover events, so it reports them back to drive the scale.
+                .scaleEffect(muteHovering ? 1.10 : 1.0)
+                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: muteHovering)
+                .overlay(FirstMouseButton(action: { engine.toggleMute() },
+                                          onHover: { muteHovering = $0 }))
+                .tooltip(engine.isMuted ? "Unmute" : "Mute")
             Slider(value: Binding(get: { engine.volume }, set: { engine.volume = $0 }), in: 0...1)
                 .controlSize(.mini)
                 .tint(accent)
