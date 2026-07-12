@@ -425,6 +425,14 @@ private struct MiniPlayerView: View {
             }
             .foregroundStyle(.secondary)
         }
+        // Scroll (wheel or trackpad) over the whole seek strip — the mini
+        // slider alone is a sliver of a target — to nudge playback ±3s per
+        // detent, same as the main window's seek bar.
+        .contentShape(Rectangle())
+        .scrollToAdjust { units in
+            guard clock.duration > 0, !isScrubbing else { return }
+            engine.seek(to: min(max(clock.currentTime + units * 3, 0), clock.duration))
+        }
     }
 
     private var transport: some View {
