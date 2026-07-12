@@ -31,6 +31,14 @@ struct Track: Identifiable, Hashable, Sendable {
 
     var url: URL { id }
 
+    /// The YouTube watch URL this track was downloaded from, reconstructed from
+    /// its `videoID`. nil for hand-added / non-YouTube files — the caller uses
+    /// this to decide whether to offer an "Open on YouTube" affordance.
+    var youtubeURL: URL? {
+        guard let videoID else { return nil }
+        return URL(string: "https://www.youtube.com/watch?v=\(videoID)")
+    }
+
     // A YouTube id is 11 chars of [A-Za-z0-9_-], embedded in the file name as
     // "name [id]". Compiled once and shared read-only (safe despite Regex not
     // being Sendable), and type-checked at compile time.

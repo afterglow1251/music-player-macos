@@ -32,6 +32,9 @@ struct PlayerWindow: View {
     @State private var urlChips: [String] = []   // links queued via the ＋ button
     @State private var shakingChipURL: String?   // chip to shake when a dupe is re-added
     @State private var isDropTargeted = false
+    /// Whether the pointer is over the now-playing title/artist strip — reveals the
+    /// "open on YouTube" link there without leaving a button parked at rest.
+    @State private var nowPlayingHover = false
     /// Decoded once per track (not per frame) so the breathing animation doesn't
     /// re-decode the artwork 30×/sec.
     @State private var artworkImage: NSImage?
@@ -313,20 +316,63 @@ struct PlayerWindow: View {
     // MARK: Now-playing info
 
     private var infoStrip: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            MarqueeText(text: nowPlayingTitle, fontSize: 15, bold: true, color: .white)
+        let track = controller.currentTrack
+        let hasArtist = !(track?.artist.isEmpty ?? true)
+        return VStack(alignment: .leading, spacing: 3) {
+            // Title line: click the title to copy it; a YouTube-sourced track also
+            // reveals an "open on YouTube" link on hover, tucked after the title.
+            HStack(spacing: 6) {
+                MarqueeText(text: nowPlayingTitle, fontSize: 15, bold: true, color: .white)
+                    .copyOnClick(nowPlayingTitle, help: "Click to copy title", enabled: track != nil)
+                if let youtubeURL = track?.youtubeURL {
+                    Button { openInBrowser(youtubeURL) } label: {
+                        Image(systemName: "arrow.up.forward.square")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(accent)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .tooltip("Open on YouTube")
+                    .opacity(nowPlayingHover ? 1 : 0)
+                    .allowsHitTesting(nowPlayingHover)
+                }
+            }
             HStack(spacing: 8) {
                 Text(nowPlayingArtist)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .copyOnClick(nowPlayingArtist, help: "Click to copy artist", enabled: hasArtist)
                 Spacer(minLength: 8)
                 SeekTimeLabel(clock: engine.clock, isScrubbing: isScrubbing,
                               scrubTime: scrubTime, accent: accent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover { nowPlayingHover = $0 }
+        .animation(.easeOut(duration: 0.15), value: nowPlayingHover)
+        // Right-click mirrors the click affordances, so the actions are also
+        // discoverable the standard macOS way.
+        .contextMenu {
+            if let track {
+                Button { copyToClipboard(track.displayTitle) } label: {
+                    Label("Copy Title", systemImage: "doc.on.doc")
+                }
+                if !track.artist.isEmpty {
+                    Button { copyToClipboard(track.artist) } label: {
+                        Label("Copy Artist", systemImage: "person")
+                    }
+                }
+                if let youtubeURL = track.youtubeURL {
+                    Button { openInBrowser(youtubeURL) } label: {
+                        Label("Open on YouTube", systemImage: "arrow.up.forward.square")
+                    }
+                }
+            }
+        }
     }
 
     private var visualizerStrip: some View {
