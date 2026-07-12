@@ -8,6 +8,9 @@ struct PlayerWindow: View {
     @StateObject private var controller = PlayerController.shared
     @State private var isFullscreen = false
     @State private var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
+    @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
+    @State private var currentRowVisible = false     // is the playing row within the list viewport
+    @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
     @State private var visualizerMode: VisualizerMode = .spectrum
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
@@ -625,6 +628,11 @@ struct PlayerWindow: View {
                 Text("\(controller.library.tracks.count)")
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
+                // Contextual "jump to the playing track" — only while it's off-screen.
+                if controller.currentTrack != nil, !currentRowVisible {
+                    nowPlayingPill
+                        .transition(.opacity)
+                }
                 Spacer()
                 if !controller.library.tracks.isEmpty {
                     viewMenu
@@ -653,6 +661,55 @@ struct PlayerWindow: View {
         .frame(height: 24)
         .padding(.horizontal, 10)
         .padding(.top, 8).padding(.bottom, 4)
+        .animation(.easeInOut(duration: 0.2), value: currentRowVisible)
+    }
+
+    /// Scroll the track list to the currently-playing track and highlight it. First
+    /// clears anything that would hide it — an active search, the favorites filter,
+    /// or a selected playlist that doesn't contain it — then triggers the scroll.
+    private func goToCurrentTrack() {
+        guard let current = controller.currentTrack else { return }
+        if searchActive {
+            withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
+            searchText = ""
+            searchFieldFocused = false
+        }
+        if controller.favorites.filterActive { controller.favorites.setFilter(false) }
+        if let playlist = selectedPlaylist, !controller.tracks(in: playlist).contains(current) {
+            selectSource(nil)
+        }
+        scrollToCurrentNonce += 1
+    }
+
+    /// A zero-size marker placed behind the currently-playing row: it emits whether
+    /// that row sits inside the list viewport (a Bool, so it only flips at the edge —
+    /// see CurrentRowVisibleKey). Absent for non-current rows, so an off-screen
+    /// current row (not rendered by the lazy stack) reads as not visible.
+    @ViewBuilder
+    private func currentRowMarker(for track: Track) -> some View {
+        if track == controller.currentTrack {
+            GeometryReader { geo in
+                let f = geo.frame(in: .named("libScroll"))
+                let visible = libViewportHeight > 0 && f.maxY > 0 && f.minY < libViewportHeight
+                Color.clear.preference(key: CurrentRowVisibleKey.self, value: visible)
+            }
+        }
+    }
+
+    /// Compact "Now playing" pill in the library header, shown only while the current
+    /// track is scrolled out of view; tapping it glides the list back to the track.
+    private var nowPlayingPill: some View {
+        Button { goToCurrentTrack() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "music.note").font(.system(size: 10, weight: .bold))
+                Text("Now playing").font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(.black)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(accent))
+            .fixedSize()
+        }
+        .buttonStyle(PressableButtonStyle())
     }
 
     // MARK: Source switcher (Library + playlists)
@@ -877,79 +934,99 @@ struct PlayerWindow: View {
     }
 
     private func trackScroll(fixedHeight: CGFloat?) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 2) {
-                // Queue lives at the top of the same list; hidden while searching.
-                if !controller.queue.isEmpty && !searchActive {
-                    queueHeader
-                    ForEach(Array(controller.queue.enumerated()), id: \.element.id) { index, item in
-                        let qid = item.id.uuidString
-                        QueueRowView(
-                            track: item.track,
-                            position: index + 1,
-                            onRemove: {
-                                withAnimation(.easeInOut(duration: 0.2)) { controller.removeFromQueue(item) }
-                            },
-                            reorderID: qid,
-                            isDragging: draggingID == qid,
-                            onReorderChanged: { y in handleQueueReorder(id: qid, cursorY: y) },
-                            onReorderEnded: { withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil } }
-                        )
-                        .modifier(ReorderDragModifier(id: qid, draggingID: draggingID,
-                                                      cursorY: dragCursorY, frames: rowFrames))
-                    }
-                    Divider().overlay(Color.white.opacity(0.08))
-                        .padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 2)
-                }
-
-                if let playlist = selectedPlaylist {
-                    if playlistTracks.isEmpty {
-                        emptyMessage("This playlist is empty — right-click a library track to add it")
-                    }
-                    ForEach(playlistTracks) { track in
-                        playlistRow(track, in: playlist)
-                    }
-                } else if controller.library.tracks.isEmpty {
-                    emptyMessage("Your library is empty — paste a URL or open a file")
-                } else {
-                    if filteredTracks.isEmpty {
-                        if controller.favorites.filterActive && searchText.isEmpty {
-                            emptyMessage("No favorites yet — tap the heart on a track")
-                        } else {
-                            emptyMessage("No tracks match “\(searchText)”")
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    // Queue lives at the top of the same list; hidden while searching.
+                    if !controller.queue.isEmpty && !searchActive {
+                        queueHeader
+                        ForEach(Array(controller.queue.enumerated()), id: \.element.id) { index, item in
+                            let qid = item.id.uuidString
+                            QueueRowView(
+                                track: item.track,
+                                position: index + 1,
+                                onRemove: {
+                                    withAnimation(.easeInOut(duration: 0.2)) { controller.removeFromQueue(item) }
+                                },
+                                reorderID: qid,
+                                isDragging: draggingID == qid,
+                                onReorderChanged: { y in handleQueueReorder(id: qid, cursorY: y) },
+                                onReorderEnded: { withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil } }
+                            )
+                            .modifier(ReorderDragModifier(id: qid, draggingID: draggingID,
+                                                          cursorY: dragCursorY, frames: rowFrames))
                         }
+                        Divider().overlay(Color.white.opacity(0.08))
+                            .padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 2)
                     }
-                    if controller.library.view == .artist && searchText.isEmpty {
-                        // Collapsible per-artist sections; single-track artists are
-                        // gathered into one "Various" group so there's no header wall.
-                        ForEach(artistSections) { section in
-                            groupHeader(section)
-                            if !collapsedGroups.contains(section.id) {
-                                ForEach(section.tracks) { track in
-                                    libraryRow(track, showArtist: section.isVarious)
-                                }
+
+                    if let playlist = selectedPlaylist {
+                        if playlistTracks.isEmpty {
+                            emptyMessage("This playlist is empty — right-click a library track to add it")
+                        }
+                        ForEach(playlistTracks) { track in
+                            playlistRow(track, in: playlist)
+                        }
+                    } else if controller.library.tracks.isEmpty {
+                        emptyMessage("Your library is empty — paste a URL or open a file")
+                    } else {
+                        if filteredTracks.isEmpty {
+                            if controller.favorites.filterActive && searchText.isEmpty {
+                                emptyMessage("No favorites yet — tap the heart on a track")
+                            } else {
+                                emptyMessage("No tracks match “\(searchText)”")
                             }
                         }
-                    } else {
-                        // Flat list (Manual / Recent / A–Z, or while searching).
-                        // Drag-to-reorder only in the hand-arranged Manual view, and
-                        // not while filtered (search or favorites) — a subset can't be
-                        // safely reordered back into the full manual order.
-                        let canReorder = searchText.isEmpty && !controller.favorites.filterActive
-                            && controller.library.view == .manual
-                        ForEach(filteredTracks) { track in
-                            libraryRow(track, reorderID: canReorder ? track.url.path : nil)
+                        if controller.library.view == .artist && searchText.isEmpty {
+                            // Collapsible per-artist sections; single-track artists are
+                            // gathered into one "Various" group so there's no header wall.
+                            ForEach(artistSections) { section in
+                                groupHeader(section)
+                                if !collapsedGroups.contains(section.id) {
+                                    ForEach(section.tracks) { track in
+                                        libraryRow(track, showArtist: section.isVarious)
+                                    }
+                                }
+                            }
+                        } else {
+                            // Flat list (Manual / Recent / A–Z, or while searching).
+                            // Drag-to-reorder only in the hand-arranged Manual view, and
+                            // not while filtered (search or favorites) — a subset can't be
+                            // safely reordered back into the full manual order.
+                            let canReorder = searchText.isEmpty && !controller.favorites.filterActive
+                                && controller.library.view == .manual
+                            ForEach(filteredTracks) { track in
+                                libraryRow(track, reorderID: canReorder ? track.url.path : nil)
+                            }
                         }
                     }
                 }
+                .padding(.horizontal, 6).padding(.vertical, 6)
+                .coordinateSpace(.named("reorder"))
+                .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
             }
-            .padding(.horizontal, 6).padding(.vertical, 6)
-            .coordinateSpace(.named("reorder"))
-            .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
+            .coordinateSpace(.named("libScroll"))
+            .frame(height: fixedHeight)
+            .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
+            .scrollIndicators(.hidden)
+            // Measure the viewport height so a row can tell whether it's on screen.
+            .background {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { libViewportHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in libViewportHeight = h }
+                }
+            }
+            .onPreferenceChange(CurrentRowVisibleKey.self) { currentRowVisible = $0 }
+            .onChange(of: scrollToCurrentNonce) { _, _ in
+                guard let id = controller.currentTrack?.id else { return }
+                // Defer a runloop so anything we just cleared (search / filter) has
+                // laid out, then center the current track.
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: .center) }
+                }
+            }
         }
-        .frame(height: fixedHeight)
-        .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
-        .scrollIndicators(.hidden)
     }
 
     /// One library row. `reorderID` non-nil enables drag (Manual view only).
@@ -982,6 +1059,7 @@ struct PlayerWindow: View {
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
                                       cursorY: dragCursorY, frames: rowFrames,
                                       enabled: reorderID != nil))
+        .background { currentRowMarker(for: track) }
     }
 
     /// One row inside a playlist. Plays through the playlist as its scope,
@@ -1016,6 +1094,7 @@ struct PlayerWindow: View {
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
                                       cursorY: dragCursorY, frames: rowFrames))
+        .background { currentRowMarker(for: track) }
     }
 
     // MARK: Sort & group
@@ -1253,54 +1332,52 @@ struct PlayerWindow: View {
                 }
                 .frame(width: 16)
 
-                // The field morphs into the status text in place — same height,
-                // so nothing below ever shifts.
-                ZStack(alignment: .leading) {
-                    if downloading {
-                        AnimatedStatusText(status: controller.downloader.status)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.75))
-                    } else {
-                        SteadyTextField(placeholder: urlChips.isEmpty ? "Paste a YouTube URL…" : "Add another…",
-                                        text: $controller.urlInput,
-                                        onSubmit: { startDownload() },
-                                        focus: $urlFieldFocused)
-                            // A space finalises the URL before it: chip it right
-                            // away (also handles pasting several space-separated
-                            // links at once).
-                            .onChange(of: controller.urlInput) { _, _ in chipCompletedURLs() }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // The field is always available — you can queue more links even while
+                // a download is in flight. While downloading, its placeholder shows
+                // the current status instead of the "paste a URL" hint, so nothing
+                // shifts and the input never disappears.
+                SteadyTextField(placeholder: (downloading || !urlChips.isEmpty)
+                                    ? "Add another…"
+                                    : "Paste a YouTube URL…",
+                                text: $controller.urlInput,
+                                onSubmit: { startDownload() },
+                                focus: $urlFieldFocused)
+                    // A space finalises the URL before it: chip it right away (also
+                    // handles pasting several space-separated links at once).
+                    .onChange(of: controller.urlInput) { _, _ in chipCompletedURLs() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
+                // Status (Preparing… / Downloading X% / Converting to mp3…) lives here
+                // now, so the field's placeholder can invite adding to the queue.
                 if downloading {
-                    // How many are still queued behind the current one.
-                    if controller.downloadsLeft > 1 {
-                        Text("\(controller.downloadsLeft)")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(.black)
-                            .frame(minWidth: 16, minHeight: 16)
-                            .padding(.horizontal, 3)
-                            .background(Capsule().fill(accent))
-                            .help("\(controller.downloadsLeft) downloads left")
-                    }
-                    Button { controller.cancelDownload() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18)).foregroundStyle(.white.opacity(0.5))
+                    AnimatedStatusText(status: controller.downloader.status)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                // How many are still queued behind the current download.
+                if downloading && controller.downloadsLeft > 1 {
+                    Text("\(controller.downloadsLeft)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(.black)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .padding(.horizontal, 3)
+                        .background(Capsule().fill(accent))
+                        .help("\(controller.downloadsLeft) downloads left")
+                }
+                // ＋ stages the current URL as a chip so you can line up several.
+                if controller.urlInput.contains("http") {
+                    Button { addURLChip() } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white.opacity(0.55))
                     }
                     .buttonStyle(PressableButtonStyle())
-                    .help("Cancel all")
-                } else {
-                    // ＋ turns the current URL into a chip so you can add another.
-                    if controller.urlInput.contains("http") {
-                        Button { addURLChip() } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.white.opacity(0.55))
-                        }
-                        .buttonStyle(PressableButtonStyle())
-                        .help("Add another link")
-                    }
+                    .help("Add another link")
+                }
+                // Download / enqueue — appends to the queue even mid-download.
+                if !downloading || canDownload {
                     Button { startDownload() } label: {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.system(size: 18))
@@ -1308,7 +1385,22 @@ struct PlayerWindow: View {
                     }
                     .buttonStyle(PressableButtonStyle())
                     .disabled(!canDownload)
-                    .help(urlChips.isEmpty ? "Download" : "Download \(pendingURLCount)")
+                    .help(downloading ? "Add to queue"
+                          : (urlChips.isEmpty ? "Download" : "Download \(pendingURLCount)"))
+                }
+                // Cancel everything while downloading — but NOT during the convert/
+                // embed phase: killing yt-dlp then can leave a tag-less, artwork-less
+                // mp3 on disk. Dimmed + inert until the conversion finishes.
+                if downloading {
+                    let converting = controller.downloader.isConverting
+                    Button { controller.cancelDownload() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.white.opacity(converting ? 0.15 : 0.5))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .disabled(converting)
+                    .help(converting ? "Finishing up — can't cancel now" : "Cancel all")
                 }
             }
             .padding(.horizontal, 12)
@@ -1353,19 +1445,22 @@ struct PlayerWindow: View {
     private var chipsStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                // Staged: typed via ＋, not yet submitted — always removable.
-                ForEach(Array(urlChips.enumerated()), id: \.offset) { index, url in
-                    urlChip(label: shortURL(url), active: false, shaking: shakingChipURL == url) {
-                        urlChips = urlChips.enumerated().filter { $0.offset != index }.map(\.element)
-                    }
-                }
-                // Queued/downloading: submitted, stays until its own download
-                // finishes. The active one can't be removed individually —
+                // Queued/downloading first (left): submitted, stays until its own
+                // download finishes. The active one can't be removed individually —
                 // use the cancel-all button next to the field for that.
                 ForEach(controller.downloadQueue) { item in
                     let isActive = item.id == controller.currentDownloadID
                     urlChip(label: shortURL(item.url), active: isActive, shaking: shakingChipURL == item.url) {
                         controller.removeFromQueue(item.id)
+                    }
+                }
+                // Staged (right): typed via ＋, not yet submitted — always removable.
+                // Kept AFTER the queue so a staged chip promoting to a queued one
+                // appears in place instead of sliding the row leftward (which read
+                // as a right-to-left animation).
+                ForEach(Array(urlChips.enumerated()), id: \.offset) { index, url in
+                    urlChip(label: shortURL(url), active: false, shaking: shakingChipURL == url) {
+                        urlChips = urlChips.enumerated().filter { $0.offset != index }.map(\.element)
                     }
                 }
             }
@@ -1480,13 +1575,26 @@ struct PlayerWindow: View {
         }
     }
 
-    /// Enqueue every chip plus whatever is in the field.
+    /// Enqueue every staged chip plus the field's URL. A field URL that's already
+    /// staged/queued gets the same feedback as ＋ — shake the existing chip instead
+    /// of being silently dropped — and one already in the library shows the notice.
     private func startDownload() {
+        let field = controller.urlInput.trimmingCharacters(in: .whitespaces)
+        if field.contains("http") {
+            if controller.isAlreadyDownloaded(field) {
+                controller.downloader.notice = "Already in library"
+                controller.urlInput = ""
+            } else if Set(urlChips).union(controller.downloadQueue.map(\.url)).contains(field) {
+                flagDuplicate(field)          // already staged/queued — shake that chip
+                controller.urlInput = ""
+            }
+        }
+
         let all = (urlChips + [controller.urlInput])
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         guard !all.isEmpty else { return }
-        controller.download(all.joined(separator: "\n"))
+        controller.download(all.joined(separator: "\n"))   // clears urlInput
         withAnimation(.easeInOut(duration: 0.2)) { urlChips = [] }
         urlFieldFocused = false
     }

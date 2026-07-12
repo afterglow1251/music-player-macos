@@ -18,6 +18,10 @@ final class Downloader: ObservableObject {
     @Published var isDownloading = false
     @Published var progress: Double = 0      // 0...1
     @Published var status: String = ""
+    /// True during the post-download convert/embed phase (ExtractAudio + thumbnail
+    /// and metadata). Cancelling here would leave a tag-less, artwork-less mp3 on
+    /// disk, so the UI disables its cancel button while this is set.
+    @Published private(set) var isConverting = false
     /// Set on a failure so the UI can show a transient error toast.
     @Published var lastError: String?
     /// Set for a transient, non-error info toast (e.g. "Already in library").
@@ -95,7 +99,8 @@ final class Downloader: ObservableObject {
         isDownloading = true
         progress = 0
         status = "Preparing…"
-        defer { isDownloading = false }
+        isConverting = false
+        defer { isDownloading = false; isConverting = false }
 
         let before = files(in: folder)
 
@@ -161,8 +166,14 @@ final class Downloader: ObservableObject {
                 let converting = text.contains("[ExtractAudio]") || text.contains("Destination")
                 Task { @MainActor in
                     guard let self else { return }
-                    if let percent { self.progress = percent / 100; self.status = "Downloading \(Int(percent))%" }
-                    else if converting { self.status = "Converting to mp3…" }
+                    if let percent {
+                        self.progress = percent / 100
+                        self.status = "Downloading \(Int(percent))%"
+                        self.isConverting = false
+                    } else if converting {
+                        self.status = "Converting to mp3…"
+                        self.isConverting = true
+                    }
                 }
             }
 

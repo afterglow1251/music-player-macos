@@ -450,6 +450,17 @@ struct RowFrameKey: PreferenceKey {
     }
 }
 
+/// Whether the currently-playing row is within the list's viewport. Emitted as a
+/// Bool (not a frame) so the value only flips as the row crosses the viewport edge
+/// — the parent's `onPreferenceChange` then fires rarely, not on every scroll
+/// frame, avoiding the churn that reporting live frames would cause.
+struct CurrentRowVisibleKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 /// Applied to a reorderable row: reports its frame, lifts it above the others
 /// while dragging, and offsets it to follow the cursor (its slot's midY keeps it
 /// glued to the finger as the rest shift).
