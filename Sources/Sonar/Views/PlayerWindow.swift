@@ -1721,19 +1721,17 @@ struct PlayerWindow: View {
                     .help(downloading ? "Add to queue"
                           : (urlChips.isEmpty ? "Download" : "Download \(pendingURLCount)"))
                 }
-                // Cancel everything while downloading — but NOT during the convert/
-                // embed phase: killing yt-dlp then can leave a tag-less, artwork-less
-                // mp3 on disk. Dimmed + inert until the conversion finishes.
+                // Cancel everything while downloading — stays live through the
+                // convert/embed phase too: with staging, cancelling then just
+                // discards the half-written file instead of leaving a stray mp3.
                 if downloading {
-                    let converting = controller.downloader.isConverting
                     Button { controller.cancelDownload() } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 18))
-                            .foregroundStyle(.white.opacity(converting ? 0.15 : 0.5))
+                            .foregroundStyle(.white.opacity(0.5))
                     }
                     .buttonStyle(PressableButtonStyle())
-                    .disabled(converting)
-                    .help(converting ? "Finishing up — can't cancel now" : "Cancel all")
+                    .help("Cancel all")
                 }
             }
             .padding(.horizontal, 12)

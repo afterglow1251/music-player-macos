@@ -26,6 +26,10 @@ final class MusicLibrary: ObservableObject {
         folder = Self.resolveFolder(prefs: Preferences())
         view = prefs.libraryView
         Self.migrateLegacyFiles(into: folder)
+        // Clear any staging left behind by a download the app didn't finish
+        // (crash/quit) — its contents are junk. Done before watching so the
+        // removal doesn't kick off a rescan.
+        sweepOrphanedStaging()
         startWatching()
         Task { await scan() }
     }
@@ -85,18 +89,7 @@ final class MusicLibrary: ObservableObject {
         let folderPath = folder.standardizedFileURL.path
         if url.standardizedFileURL.path.hasPrefix(folderPath + "/") { return url }
 
-        var destination = folder.appendingPathComponent(url.lastPathComponent)
-        // Never clobber a different file that already has this name — dedupe.
-        if fm.fileExists(atPath: destination.path) {
-            let base = url.deletingPathExtension().lastPathComponent
-            let ext = url.pathExtension
-            var n = 2
-            repeat {
-                let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
-                destination = folder.appendingPathComponent(name)
-                n += 1
-            } while fm.fileExists(atPath: destination.path)
-        }
+        let destination = uniqueDestination(for: url.lastPathComponent)
         do {
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)
             try fm.copyItem(at: url, to: destination)
@@ -104,6 +97,91 @@ final class MusicLibrary: ObservableObject {
         } catch {
             return url
         }
+    }
+
+    /// A collision-free destination inside the library folder for `filename`:
+    /// the plain name if free, otherwise " 2", " 3", … inserted before the
+    /// extension. Shared by the copy-in (import) and move-in (download adopt)
+    /// paths so both dedupe identically.
+    private func uniqueDestination(for filename: String) -> URL {
+        let fm = FileManager.default
+        var destination = folder.appendingPathComponent(filename)
+        guard fm.fileExists(atPath: destination.path) else { return destination }
+        let name = filename as NSString
+        let base = name.deletingPathExtension
+        let ext = name.pathExtension
+        var n = 2
+        repeat {
+            let candidate = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
+            destination = folder.appendingPathComponent(candidate)
+            n += 1
+        } while fm.fileExists(atPath: destination.path)
+        return destination
+    }
+
+    // MARK: Staging (in-flight downloads)
+
+    /// A fresh hidden staging directory (`folder/.staging/<uuid>`) for one
+    /// in-flight download. yt-dlp writes its intermediates here, where the
+    /// watcher never sees them (`.skipsHiddenFiles` blocks descent into
+    /// `.staging`), so no half-written row ever appears in the library. Returns
+    /// nil if the directory can't be created.
+    func makeStagingDir() -> URL? {
+        let dir = folder.appendingPathComponent(".staging", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        } catch {
+            return nil
+        }
+    }
+
+    /// Remove one download's staging directory and anything left in it.
+    /// Idempotent — safe to call on every download exit path.
+    func discardStaging(_ dir: URL) {
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Clear the whole `.staging` tree. Any survivor is from a download an
+    /// earlier session didn't finish (crash/quit), so it's junk. Called once
+    /// from `init` after the folder is resolved.
+    func sweepOrphanedStaging() {
+        let staging = folder.appendingPathComponent(".staging", isDirectory: true)
+        try? FileManager.default.removeItem(at: staging)
+    }
+
+    /// Move a finished, staged file into the library and register it — the
+    /// download counterpart to `bringIntoLibrary`'s copy. The fast path is an
+    /// atomic rename when staging and library share a volume; if the library was
+    /// relocated to another volume mid-download (`setFolder`), fall back to
+    /// copy + delete. On any move-in failure the file is left in staging (swept
+    /// later) and nil is returned. The finished row appears solely via the
+    /// in-memory insert below (matching `add`), since the watcher stays silent.
+    @discardableResult
+    func adopt(_ stagedURL: URL) async -> Track? {
+        let fm = FileManager.default
+        let destination = uniqueDestination(for: stagedURL.lastPathComponent)
+        do {
+            try fm.moveItem(at: stagedURL, to: destination)
+        } catch {
+            // Cross-volume: clear any partial destination FIRST, then copy across
+            // and unlink the source. Give up (leave for sweep) if the copy fails.
+            do {
+                try? fm.removeItem(at: destination)
+                try fm.copyItem(at: stagedURL, to: destination)
+                try? fm.removeItem(at: stagedURL)
+            } catch {
+                return nil
+            }
+        }
+        let track = await Track.load(from: destination)
+        if let existing = tracks.firstIndex(of: track) {
+            tracks[existing] = track
+        } else {
+            tracks = arranged(tracks + [track])
+        }
+        return track
     }
 
     /// Switch the browse order. Persisted so it survives relaunch.

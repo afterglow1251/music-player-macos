@@ -529,9 +529,25 @@ final class PlayerController: ObservableObject {
             downloader.notice = "Already in library"   // surfaced as a toast
             return
         }
-        guard let fileURL = await downloader.download(url, into: library.folder) else { return }
+        // Stage the download in a hidden dir the watcher never sees, so a
+        // half-written file can never appear as a (deletable, race-prone) row.
+        // The finished mp3 is adopted into the library; staging is discarded on
+        // every exit path — cancel, failure, adopt failure, and success.
+        guard let stagingDir = library.makeStagingDir() else {
+            downloader.lastError = "Couldn't prepare download"
+            return
+        }
+        guard let fileURL = await downloader.download(url, into: stagingDir) else {
+            library.discardStaging(stagingDir)
+            return
+        }
         // Just add it to the library — don't hijack whatever is currently playing.
-        await library.add(fileURL)
+        guard await library.adopt(fileURL) != nil else {
+            downloader.lastError = "Couldn't add to library"
+            library.discardStaging(stagingDir)
+            return
+        }
+        library.discardStaging(stagingDir)
         downloader.notice = "Added to library"          // success toast
     }
 

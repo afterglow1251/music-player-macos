@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Thread-safe string accumulator for subprocess output collected off the main thread.
 private final class OutputBox: @unchecked Sendable {
@@ -19,8 +20,8 @@ final class Downloader: ObservableObject {
     @Published var progress: Double = 0      // 0...1
     @Published var status: String = ""
     /// True during the post-download convert/embed phase (ExtractAudio + thumbnail
-    /// and metadata). Cancelling here would leave a tag-less, artwork-less mp3 on
-    /// disk, so the UI disables its cancel button while this is set.
+    /// and metadata), used to surface a "Converting…" status. Cancelling here is
+    /// safe now: the intermediate lives in staging and is discarded on abort.
     @Published private(set) var isConverting = false
     /// Set on a failure so the UI can show a transient error toast.
     @Published var lastError: String?
@@ -43,7 +44,17 @@ final class Downloader: ObservableObject {
     /// Cancel the in-flight download, if any.
     func cancel() {
         cancelled = true
-        currentProcess?.terminate()
+        let process = currentProcess
+        process?.terminate()   // SIGTERM
+        // Escalate to SIGKILL if it's still alive after a short grace window.
+        // Scheduled off the main actor so it never blocks, and gated on the
+        // captured instance's `isRunning` so we never signal a bare, recycled PID.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            if let process, process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
     }
 
     func beginChecking() {
@@ -73,8 +84,10 @@ final class Downloader: ObservableObject {
         return (id?.isEmpty == false) ? id : nil
     }
 
-    /// Download `urlString` into `folder`. Returns the new mp3's URL on success.
-    func download(_ urlString: String, into folder: URL) async -> URL? {
+    /// Download `urlString` into `stagingDir` (a fresh, hidden dir the library
+    /// hands us). Returns the new mp3's URL on success; the caller adopts it into
+    /// the library and discards the staging dir on every exit path.
+    func download(_ urlString: String, into stagingDir: URL) async -> URL? {
         guard let ytDlpPath else {
             let message = "yt-dlp not installed (brew install yt-dlp)"
             lastError = message
@@ -102,8 +115,6 @@ final class Downloader: ObservableObject {
         isConverting = false
         defer { isDownloading = false; isConverting = false }
 
-        let before = files(in: folder)
-
         let args = ["-x", "--audio-format", "mp3", "--audio-quality", "0",
                     "--no-playlist", "--embed-thumbnail", "--add-metadata",
                     // Fill the artist tag from the channel when the video has no
@@ -111,7 +122,7 @@ final class Downloader: ObservableObject {
                     "--parse-metadata", "%(artist,uploader)s:%(artist)s",
                     "--newline",
                     "--ffmpeg-location", toolsDir,
-                    "-o", folder.appendingPathComponent("%(title)s [%(id)s].%(ext)s").path,
+                    "-o", stagingDir.appendingPathComponent("%(title)s [%(id)s].%(ext)s").path,
                     "--", trimmed]
 
         let output = OutputBox()
@@ -126,12 +137,11 @@ final class Downloader: ObservableObject {
             return nil
         }
 
-        // yt-dlp doesn't cleanly report the final path, so diff the folder.
-        let after = files(in: folder)
-        let added = after.subtracting(before).filter { $0.pathExtension.lowercased() == "mp3" }
-        let result = added.first
-            ?? after.filter { $0.pathExtension.lowercased() == "mp3" }
-                    .max { modDate($0) < modDate($1) }
+        // The staging dir was freshly created for this one download, so the mp3
+        // yt-dlp just wrote is the only one in it.
+        let produced = (try? FileManager.default.contentsOfDirectory(
+            at: stagingDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        let result = produced.first { $0.pathExtension.lowercased() == "mp3" }
 
         status = result != nil ? "Done" : "File not found"
         progress = 1
@@ -244,15 +254,5 @@ final class Downloader: ObservableObject {
     private func isValidURL(_ string: String) -> Bool {
         guard let scheme = URL(string: string)?.scheme?.lowercased() else { return false }
         return scheme == "http" || scheme == "https"
-    }
-
-    private func files(in folder: URL) -> Set<URL> {
-        let urls = (try? FileManager.default.contentsOfDirectory(
-            at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
-        return Set(urls)
-    }
-
-    private func modDate(_ url: URL) -> Date {
-        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 }
