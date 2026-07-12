@@ -500,6 +500,7 @@ struct PlayerWindow: View {
                 .controlSize(.mini)
                 .tint(accent)
                 .frame(width: 96)
+                .scrollToAdjust { engine.volume = min(max(engine.volume + Float($0) * 0.05, 0), 1) }
         }
     }
 
@@ -1794,6 +1795,11 @@ private struct SeekSlider: View {
                 case .active(let point): seekHoverX = point.x
                 case .ended: seekHoverX = nil
                 }
+            }
+            // Scroll over the bar to seek ±~3s per detent.
+            .scrollToAdjust { units in
+                guard clock.duration > 0, !isScrubbing else { return }
+                engine.seek(to: min(max(clock.currentTime + units * 3, 0), clock.duration))
             }
         }
         .frame(height: 22)

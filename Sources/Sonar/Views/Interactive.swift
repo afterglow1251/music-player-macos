@@ -502,6 +502,58 @@ struct FirstMouseButton: NSViewRepresentable {
     }
 }
 
+/// Scroll-wheel / trackpad-scroll to nudge a control's value. SwiftUI has no
+/// `onScrollWheel` for arbitrary views, so while the cursor is over the view we
+/// install a local scroll-wheel monitor and forward a normalized delta to
+/// `onScroll` — one unit ≈ one wheel detent, **positive = physically scrolling up**
+/// (add it to increase). Overlaying an NSView instead would swallow the slider's
+/// own clicks (scroll delivery uses hit-testing), so hover-gating a monitor keeps
+/// the underlying control fully interactive. The monitor consumes the event so a
+/// parent ScrollView doesn't also move, and is torn down as soon as the cursor
+/// leaves (or the view disappears).
+struct ScrollToAdjust: ViewModifier {
+    let onScroll: (Double) -> Void
+    @State private var monitor: Any?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in inside ? install() : remove() }
+            .onDisappear(perform: remove)
+    }
+
+    private func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            var dy = event.scrollingDeltaY
+            guard dy != 0 else { return event }
+            // `scrollingDeltaY` already has the user's "natural scrolling" setting
+            // baked in, so the same physical gesture reports opposite signs on a
+            // trackpad (natural) vs a mouse wheel. Undo it via
+            // `isDirectionInvertedFromDevice` so a physical upward scroll is always
+            // positive — otherwise the control's direction flips per device.
+            if event.isDirectionInvertedFromDevice { dy = -dy }
+            // Trackpads report many small pixel deltas; a wheel reports a few lines.
+            // Normalize both to "detents" so callers can use one step size.
+            let units = event.hasPreciseScrollingDeltas ? dy / 8 : dy
+            onScroll(Double(units))
+            return nil
+        }
+    }
+
+    private func remove() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
+extension View {
+    /// See `ScrollToAdjust`. `onScroll` gets a normalized delta (≈ detents,
+    /// positive = up); multiply by your control's per-detent step.
+    func scrollToAdjust(_ onScroll: @escaping (Double) -> Void) -> some View {
+        modifier(ScrollToAdjust(onScroll: onScroll))
+    }
+}
+
 /// Applied to a reorderable row: reports its frame, lifts it above the others
 /// while dragging, and offsets it to follow the cursor (its slot's midY keeps it
 /// glued to the finger as the rest shift).

@@ -77,6 +77,8 @@ private struct EQBandSlider: View {
                 .frame(width: length)                 // horizontal length before rotating
                 .rotationEffect(.degrees(-90))        // → vertical
                 .frame(width: 22, height: length)     // reserve the vertical space
+                // Scroll over this band to adjust it by ±1 dB per detent.
+                .scrollToAdjust { gain = min(max(gain + Float($0), -12), 12) }
             Text(label)
                 .font(.system(size: 8, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.4))
