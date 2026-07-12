@@ -62,13 +62,48 @@ final class MusicLibrary: ObservableObject {
     /// Add a single freshly-downloaded file without rescanning everything.
     @discardableResult
     func add(_ url: URL) async -> Track {
-        let track = await Track.load(from: url)
+        let localURL = bringIntoLibrary(url)
+        let track = await Track.load(from: localURL)
         if let existing = tracks.firstIndex(of: track) {
             tracks[existing] = track
         } else {
             tracks = arranged(tracks + [track])
         }
         return track
+    }
+
+    /// Ensure an imported file physically lives inside the library folder. Files
+    /// added from elsewhere (Open File / drag-drop out of Downloads, etc.) are
+    /// copied in, so the library owns its own copy — and, crucially, Trash "Put
+    /// Back" returns a deleted track to the library folder rather than to wherever
+    /// it was imported from. This matches downloads, which yt-dlp already writes
+    /// straight into the folder. Files already inside the folder are referenced
+    /// as-is (no copy). On any copy failure we fall back to the original URL so the
+    /// import still succeeds.
+    private func bringIntoLibrary(_ url: URL) -> URL {
+        let fm = FileManager.default
+        let folderPath = folder.standardizedFileURL.path
+        if url.standardizedFileURL.path.hasPrefix(folderPath + "/") { return url }
+
+        var destination = folder.appendingPathComponent(url.lastPathComponent)
+        // Never clobber a different file that already has this name — dedupe.
+        if fm.fileExists(atPath: destination.path) {
+            let base = url.deletingPathExtension().lastPathComponent
+            let ext = url.pathExtension
+            var n = 2
+            repeat {
+                let name = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
+                destination = folder.appendingPathComponent(name)
+                n += 1
+            } while fm.fileExists(atPath: destination.path)
+        }
+        do {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            try fm.copyItem(at: url, to: destination)
+            return destination
+        } catch {
+            return url
+        }
     }
 
     /// Switch the browse order. Persisted so it survives relaunch.
