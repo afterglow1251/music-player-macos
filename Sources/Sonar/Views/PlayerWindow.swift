@@ -1544,28 +1544,39 @@ struct PlayerWindow: View {
     // MARK: Drag & drop
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-
-        if provider.canLoadObject(ofClass: URL.self) {
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url else { return }
-                Task { @MainActor in
-                    if url.isFileURL {
-                        let track = await controller.library.add(url)
-                        controller.play(track)
-                    } else {
-                        controller.download(url.absoluteString)
-                    }
+        let urlProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
+        if !urlProviders.isEmpty {
+            Task { @MainActor in
+                var files: [URL] = []
+                for provider in urlProviders {
+                    guard let url = await loadURL(from: provider) else { continue }
+                    if url.isFileURL { files.append(url) }
+                    else { controller.download(url.absoluteString) }   // a dragged link
                 }
+                // Import every dropped file at once — added to the library with an
+                // "Added" toast, without hijacking playback (same as a download).
+                controller.importFiles(files)
             }
             return true
         }
 
-        _ = provider.loadObject(ofClass: NSString.self) { string, _ in
-            guard let text = string as? String, text.contains("http") else { return }
-            Task { @MainActor in controller.download(text) }
+        // Fallback: a dragged plain-text http link (no URL object).
+        for provider in providers {
+            _ = provider.loadObject(ofClass: NSString.self) { string, _ in
+                guard let text = string as? String, text.contains("http") else { return }
+                Task { @MainActor in controller.download(text) }
+            }
         }
         return true
+    }
+
+    /// Await an `NSItemProvider`'s URL (wraps the callback-based load API).
+    private func loadURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                continuation.resume(returning: url)
+            }
+        }
     }
 
     // MARK: Helpers
@@ -1580,20 +1591,7 @@ struct PlayerWindow: View {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK else { return }
-        let urls = panel.urls
-        Task {
-            var firstTrack: Track?
-            for url in urls {
-                let track = await controller.library.add(url)
-                if firstTrack == nil { firstTrack = track }
-            }
-            // A single chosen file plays immediately, matching the previous
-            // behavior. Importing several files just adds them to the
-            // library — don't hijack whatever is currently playing.
-            if urls.count == 1, let firstTrack {
-                controller.play(firstTrack)
-            }
-        }
+        controller.importFiles(panel.urls)
     }
 
     /// Drop the cursor from any text field (Esc / click outside).

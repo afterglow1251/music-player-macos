@@ -425,6 +425,17 @@ final class PlayerController: ObservableObject {
         downloader.notice = "Added to library"          // success toast
     }
 
+    /// Import audio files already on disk (Open File / drag-drop) into the library.
+    /// Mirrors a download: add each to the library and surface an "Added" toast,
+    /// without hijacking whatever is currently playing.
+    func importFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        Task { @MainActor in
+            for url in urls { await library.add(url) }
+            downloader.notice = urls.count == 1 ? "Added to library" : "Added \(urls.count) to library"
+        }
+    }
+
     /// Drop one queued (not-yet-started) item. No-op for the active download —
     /// use `cancelDownload()` to stop that.
     func removeFromQueue(_ id: DownloadItem.ID) {
