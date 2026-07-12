@@ -59,10 +59,10 @@ final class Downloader: ObservableObject {
     func fetchVideoID(_ urlString: String) async -> String? {
         guard let ytDlpPath else { return nil }
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, isValidURL(trimmed) else { return nil }
         let output = OutputBox()
         _ = await run(executable: ytDlpPath,
-                      arguments: ["--print", "%(id)s", "--skip-download", "--no-playlist", trimmed],
+                      arguments: ["--print", "%(id)s", "--skip-download", "--no-playlist", "--", trimmed],
                       collect: { output.append($0) })
         let id = output.value.split(separator: "\n").first.map(String.init)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -79,6 +79,12 @@ final class Downloader: ObservableObject {
         }
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        guard isValidURL(trimmed) else {
+            let message = "Download failed — invalid URL"
+            lastError = message
+            status = message
+            return nil
+        }
 
         // Don't reset `cancelled` here — it's cleared once per item in
         // beginChecking(). If the user hit cancel during the checking phase, bail
@@ -101,7 +107,7 @@ final class Downloader: ObservableObject {
                     "--newline",
                     "--ffmpeg-location", toolsDir,
                     "-o", folder.appendingPathComponent("%(title)s [%(id)s].%(ext)s").path,
-                    trimmed]
+                    "--", trimmed]
 
         let code = await run(executable: ytDlpPath, arguments: args)
         if cancelled {
@@ -186,6 +192,13 @@ final class Downloader: ObservableObject {
             scanner = scanner[range.upperBound...]
         }
         return found
+    }
+
+    /// Only accept http/https — rejects empty schemes, `file:`, and anything
+    /// else that could otherwise be mistaken for a yt-dlp flag (e.g. `-o...`).
+    private func isValidURL(_ string: String) -> Bool {
+        guard let scheme = URL(string: string)?.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https"
     }
 
     private func files(in folder: URL) -> Set<URL> {
