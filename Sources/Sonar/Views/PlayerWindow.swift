@@ -588,7 +588,10 @@ struct PlayerWindow: View {
     private func libraryCard(list: some View, plain: Bool = false) -> some View {
         VStack(spacing: 0) {
             if let playlist = selectedPlaylist { playlistHeader(playlist) } else { libraryHeader }
-            if !searchActive { sourceBar }
+            // Keep the source switcher present while searching too: toggling it in/out
+            // changed the height above the list, which nudged the scroll position on
+            // every open/close of search.
+            sourceBar
             Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6).padding(.top, 6)
             list
         }
