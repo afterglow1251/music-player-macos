@@ -328,9 +328,12 @@ struct TrackRowView: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            // The note doubles as the favorite marker: pink on favorited rows.
+            // The current track keeps the accent speaker/note — "playing" outranks
+            // "favorited", and that row is already highlighted anyway.
             Image(systemName: isCurrent && isPlaying ? "speaker.wave.2.fill" : "music.note")
                 .font(.system(size: 10))
-                .foregroundStyle(isCurrent ? accent : .white.opacity(0.4))
+                .foregroundStyle(isCurrent ? accent : isFavorite ? Theme.favorite : .white.opacity(0.4))
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(track.displayTitle)
@@ -368,8 +371,8 @@ struct TrackRowView: View {
                         }
                         .buttonStyle(PressableButtonStyle())
                         .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
-                        // Visible at rest too, as a faint favorite indicator.
-                        .opacity(isFavorite || hovering ? 1 : 0)
+                        // Hover-only: at rest the pink note is the favorite marker.
+                        .opacity(hovering ? 1 : 0)
                         .allowsHitTesting(hovering)
                     }
                     Button(action: onDelete) {
