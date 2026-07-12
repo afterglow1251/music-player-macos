@@ -9,7 +9,7 @@ struct PlayerWindow: View {
     @State private var isFullscreen = false
     @State private var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
     @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
-    @State private var currentRowVisible = false     // is the playing row within the list viewport
+    @State private var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
     @State private var selectedTrackID: Track.ID?    // keyboard-navigation cursor in the track list
     @State private var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
@@ -658,7 +658,7 @@ struct PlayerWindow: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
                 // Contextual "jump to the playing track" — only while it's off-screen.
-                if controller.currentTrack != nil, !currentRowVisible {
+                if controller.currentTrack != nil, showNowPlayingPill {
                     nowPlayingPill
                         .transition(.opacity)
                 }
@@ -690,7 +690,7 @@ struct PlayerWindow: View {
         .frame(height: 24)
         .padding(.horizontal, 10)
         .padding(.top, 8).padding(.bottom, 4)
-        .animation(.easeInOut(duration: 0.2), value: currentRowVisible)
+        .animation(.easeInOut(duration: 0.2), value: showNowPlayingPill)
     }
 
     /// Scroll the track list to the currently-playing track and highlight it. First
@@ -769,7 +769,8 @@ struct PlayerWindow: View {
             GeometryReader { geo in
                 let f = geo.frame(in: .named("libScroll"))
                 let visible = libViewportHeight > 0 && f.maxY > 0 && f.minY < libViewportHeight
-                Color.clear.preference(key: CurrentRowVisibleKey.self, value: visible)
+                Color.clear.preference(key: CurrentRowVisibleKey.self,
+                                       value: CurrentRowReport(source: selectedPlaylistID, visible: visible))
             }
         }
     }
@@ -922,6 +923,12 @@ struct PlayerWindow: View {
         // Switch instantly: animating a full header swap (LIBRARY ↔ playlist)
         // interpolates two different layouts and stutters. The pill highlight
         // animates on its own; the list content just swaps cleanly.
+        // Hide the pill across a real source switch: the old list's "off-screen"
+        // must not leak into the new header for the frame before the new layout
+        // reports back (the report re-shows it if the row is genuinely out of
+        // view). Same-source clicks keep the pill — the preference value won't
+        // change, so no report would come to restore it.
+        if id != selectedPlaylistID { showNowPlayingPill = false }
         selectedPlaylistID = id
         if id != nil { searchActive = false; searchText = "" }
     }
@@ -1091,6 +1098,14 @@ struct PlayerWindow: View {
                     Color.clear.frame(height: 8).id(Self.listBottomAnchorID)
                 }
                 .padding(.horizontal, 6).padding(.vertical, 6)
+                // Baseline "current row not visible" report from this source's
+                // layout. The row marker ORs its "visible" on top; with no marker
+                // rendered (row filtered out or far off-screen in the lazy stack)
+                // this still guarantees a report tagged with the current source.
+                .background {
+                    Color.clear.preference(key: CurrentRowVisibleKey.self,
+                                           value: CurrentRowReport(source: selectedPlaylistID, visible: false))
+                }
                 .coordinateSpace(.named("reorder"))
                 .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
                 // Inside the ScrollView on purpose — see OverlayScrollerStyle.
@@ -1107,7 +1122,15 @@ struct PlayerWindow: View {
                         .onChange(of: geo.size.height) { _, h in libViewportHeight = h }
                 }
             }
-            .onPreferenceChange(CurrentRowVisibleKey.self) { currentRowVisible = $0 }
+            // The pill state comes straight from the layout's own report — no
+            // timers. The source tag rejects stale reports from the outgoing
+            // list during a switch; the new list's report (guaranteed by the
+            // baseline emitter, even off-screen → off-screen) then flips the
+            // pill exactly when the new layout has spoken.
+            .onPreferenceChange(CurrentRowVisibleKey.self) { report in
+                guard let report, report.source == selectedPlaylistID else { return }
+                showNowPlayingPill = !report.visible
+            }
             // Keep the cursor on the playing track: when playback advances (auto-
             // advance, next/prev), move the selection to it so the outline never
             // lingers on the previous row. No scroll here — the "Now playing" pill

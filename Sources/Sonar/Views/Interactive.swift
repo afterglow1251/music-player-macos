@@ -488,14 +488,25 @@ struct RowFrameKey: PreferenceKey {
     }
 }
 
-/// Whether the currently-playing row is within the list's viewport. Emitted as a
-/// Bool (not a frame) so the value only flips as the row crosses the viewport edge
-/// — the parent's `onPreferenceChange` then fires rarely, not on every scroll
-/// frame, avoiding the churn that reporting live frames would cause.
+/// Whether the currently-playing row is within the list's viewport, tagged with
+/// the source (nil = library, else a playlist) whose layout produced the report.
+/// Visibility is a Bool (not a frame) so the value only flips as the row crosses
+/// the viewport edge — `onPreferenceChange` fires rarely, not on every scroll
+/// frame. The source tag makes every source switch deliver a fresh report even
+/// when visibility itself doesn't change (off-screen in both lists), so the
+/// parent can sync to the new layout without resorting to timers.
+struct CurrentRowReport: Equatable {
+    var source: Playlist.ID?
+    var visible: Bool
+}
+
 struct CurrentRowVisibleKey: PreferenceKey {
-    static let defaultValue = false
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = value || nextValue()
+    static let defaultValue: CurrentRowReport? = nil
+    static func reduce(value: inout CurrentRowReport?, nextValue: () -> CurrentRowReport?) {
+        guard let next = nextValue() else { return }
+        // Same tree = same source; the row marker's "visible" wins over the
+        // list-level baseline "not visible".
+        value = CurrentRowReport(source: next.source, visible: (value?.visible ?? false) || next.visible)
     }
 }
 
