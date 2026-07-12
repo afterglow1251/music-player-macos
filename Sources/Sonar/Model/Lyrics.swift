@@ -57,23 +57,19 @@ enum LyricsProvider {
     // MARK: LRCLIB
 
     private static func fetchFromLRCLIB(_ track: Track) async -> (raw: String, parsed: [LyricLine])? {
-        guard !track.displayTitle.isEmpty else { return nil }
+        guard let lk = lookup(for: track) else { return nil }
 
-        // 1. Exact /api/get on the file's own tags (matches artist+title server-side).
-        if !track.artist.isEmpty,
-           let hit = await lrclibGetExact(artist: track.artist, title: track.displayTitle,
-                                          duration: track.duration) {
-            return hit
+        // 1. Exact /api/get on each candidate (artist, title) — precise and cheap when
+        //    the tags (or a clean "Artist - Title" display name) are accurate.
+        for artist in lk.artists {
+            if let hit = await lrclibGetExact(artist: artist, title: lk.title,
+                                              duration: track.duration) {
+                return hit
+            }
         }
-        // 2. YouTube titles pack the real "Artist - Title" into one field — split it
-        //    out and do an exact /api/get on those clean fields.
-        if let (artist, title) = parseArtistTitle(from: track.displayTitle),
-           let hit = await lrclibGetExact(artist: artist, title: title, duration: track.duration) {
-            return hit
-        }
-        // 3. Last resort: fuzzy search, but only ACCEPT a result that verifiably
-        //    matches this track. Better no lyrics than someone else's lyrics.
-        return await lrclibSearch(track)
+        // 2. Fuzzy search fallback for messy names, but only ACCEPT a result that
+        //    verifiably matches this track. Better no lyrics than someone else's.
+        return await lrclibSearch(lk, track: track)
     }
 
     /// Exact lookup by artist + title. Tries with the duration first (LRCLIB's most
@@ -100,16 +96,30 @@ enum LyricsProvider {
         return nil
     }
 
-    /// Fuzzy fallback: full-text search, keeping only results that pass a confidence
-    /// gate (duration within a few seconds AND the title/artist words actually match).
-    /// Among the survivors, the closest duration wins. If nothing qualifies → nil.
-    private static func lrclibSearch(_ track: Track) async -> (raw: String, parsed: [LyricLine])? {
-        for query in searchQueries(for: track) {
-            guard var components = URLComponents(string: "https://lrclib.net/api/search") else { continue }
-            components.queryItems = [URLQueryItem(name: "q", value: query)]
-            guard let url = components.url,
-                  let results: [LRCLIBRecord] = await get(url) else { continue }
+    /// Fuzzy fallback, keeping only results that pass a confidence gate (duration
+    /// within a few seconds AND the title/artist words actually match). Tries the
+    /// queries in priority order and, on the first that yields survivors, returns the
+    /// one whose duration is closest. If nothing qualifies → nil.
+    ///
+    /// Query order matters for both recall and precision:
+    ///   1. Structured `track_name` + `artist_name` — LRCLIB's fuzzy field search, the
+    ///      highest-recall option for collab names however they're joined server-side.
+    ///   2. Free-text `q=` with a separator-normalized artist + title — a broader net.
+    ///   3. Title alone, but only when we have no artist at all (the gate guards it).
+    private static func lrclibSearch(_ lk: Lookup, track: Track) async -> (raw: String, parsed: [LyricLine])? {
+        var queries: [SearchQuery] = []
+        for artist in lk.artists {
+            queries.append(SearchQuery(track: lk.title, artist: normalizeArtist(artist)))
+        }
+        for artist in lk.artists {
+            let q = (normalizeArtist(artist) + " " + lk.title).trimmingCharacters(in: .whitespaces)
+            queries.append(SearchQuery(q: q))
+        }
+        if lk.artists.isEmpty { queries.append(SearchQuery(q: lk.title)) }
 
+        var seen = Set<SearchQuery>()
+        for query in queries where seen.insert(query).inserted {
+            guard let results = await runSearch(query) else { continue }
             let candidates = results.filter {
                 !($0.syncedLyrics ?? "").isEmpty
                     && isConfidentMatch(title: $0.trackName ?? "", artist: $0.artistName ?? "",
@@ -126,6 +136,21 @@ enum LyricsProvider {
             }
         }
         return nil
+    }
+
+    /// One `/api/search` request. Either free-text (`q`) or structured (`track_name`
+    /// + optional `artist_name`); blank artist fields are dropped so LRCLIB doesn't
+    /// over-constrain.
+    private static func runSearch(_ query: SearchQuery) async -> [LRCLIBRecord]? {
+        guard var components = URLComponents(string: "https://lrclib.net/api/search") else { return nil }
+        var items: [URLQueryItem] = []
+        if let q = query.q, !q.isEmpty { items.append(URLQueryItem(name: "q", value: q)) }
+        if let track = query.track, !track.isEmpty { items.append(URLQueryItem(name: "track_name", value: track)) }
+        if let artist = query.artist, !artist.isEmpty { items.append(URLQueryItem(name: "artist_name", value: artist)) }
+        guard !items.isEmpty else { return nil }
+        components.queryItems = items
+        guard let url = components.url else { return nil }
+        return await get(url)
     }
 
     // MARK: Match confidence
@@ -166,39 +191,69 @@ enum LyricsProvider {
         return Set(cleaned.split(separator: " ").map(String.init).filter { $0.count >= 2 })
     }
 
-    /// Split a "Artist - Title" style name into its two halves (title de-noised).
-    /// nil when there's no " - " separator to split on.
-    private static func parseArtistTitle(from name: String) -> (artist: String, title: String)? {
-        guard let range = name.range(of: " - ") else { return nil }
-        let artist = String(name[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
-        var title = String(name[range.upperBound...])
-        title = title.replacing(featRegex, with: "").replacing(bracketRegex, with: "")
-            .trimmingCharacters(in: .whitespaces)
-        guard !artist.isEmpty, !title.isEmpty else { return nil }
-        return (artist, title)
+    // MARK: Query building
+
+    /// One `/api/search` request's parameters — free-text (`q`) or structured
+    /// (`track` + `artist`). Hashable so duplicate queries are only issued once.
+    private struct SearchQuery: Hashable {
+        var track: String?
+        var artist: String?
+        var q: String?
     }
 
-    /// Search queries in priority order: the noise-stripped title alone (already holds
-    /// the real "Artist - Title"), then artist + title when the artist adds something.
-    private static func searchQueries(for track: Track) -> [String] {
-        let title = track.displayTitle.replacing(noiseRegex, with: "")
+    /// Normalized lookup terms for a track: a cleaned title plus candidate artist
+    /// strings, best guess first — the file's own artist tag, then any "Artist - Title"
+    /// prefix packed into the display name (YouTube style). nil when there's no title
+    /// to search on.
+    private struct Lookup {
+        let title: String
+        let artists: [String]
+    }
+
+    private static func lookup(for track: Track) -> Lookup? {
+        let raw = track.displayTitle.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return nil }
+
+        let dash = raw.range(of: " - ")
+        let title = clean(dash.map { String(raw[$0.upperBound...]) } ?? raw)
+        guard !title.isEmpty else { return nil }
+
+        var artists: [String] = []
+        for candidate in [track.artist, dash.map { String(raw[..<$0.lowerBound]) } ?? ""] {
+            let a = candidate.trimmingCharacters(in: .whitespaces)
+            if !a.isEmpty, !artists.contains(where: { $0.caseInsensitiveCompare(a) == .orderedSame }) {
+                artists.append(a)
+            }
+        }
+        return Lookup(title: title, artists: artists)
+    }
+
+    /// Strip bracketed groups and any trailing feat/ft clause, then collapse whitespace.
+    /// Used for the canonical title — LRCLIB indexes the bare song name, so label tags
+    /// like "[Ultra Records]" and "(Official Video)" only hurt recall.
+    private static func clean(_ s: String) -> String {
+        s.replacing(bracketRegex, with: " ")
+            .replacing(featRegex, with: " ")
+            .replacing(wsRegex, with: " ")
             .trimmingCharacters(in: .whitespaces)
-        let artist = track.artist.trimmingCharacters(in: .whitespaces)
-        var queries = [title]
-        if !artist.isEmpty, !title.localizedCaseInsensitiveContains(artist) {
-            queries.append((artist + " " + title).trimmingCharacters(in: .whitespaces))
-        }
-        return queries.filter { !$0.isEmpty }.reduce(into: []) { acc, q in
-            if !acc.contains(q) { acc.append(q) }
-        }
+    }
+
+    /// Flatten collaboration separators (x, ×, &, vs, feat, and, /, ",", +, ;) to
+    /// spaces so a query matches however LRCLIB happens to join the collaborators —
+    /// "A x B", "A & B", "A, B" and "A/B" all become "A B".
+    private static func normalizeArtist(_ s: String) -> String {
+        clean(s).replacing(artistSepRegex, with: " ")
+            .replacing(wsRegex, with: " ")
+            .trimmingCharacters(in: .whitespaces)
     }
 
     // Bracketed groups "(…)"/"[…]" and a trailing "feat…/ft…" clause — noise for matching.
     nonisolated(unsafe) private static let bracketRegex = /[\(\[][^\)\]]*[\)\]]/
     nonisolated(unsafe) private static let featRegex = /(?i)\s*\b(?:feat|ft)\b\.?.*/
-    // Release-noise parentheticals dropped from a search query (kept: "(feat…)").
-    nonisolated(unsafe) private static let noiseRegex =
-        /\s*[\(\[][^\)\]]*(?i:official|video|audio|lyrics?|visuali[sz]er|remaster|explicit|\bhd\b|\b4k\b|\bmv\b)[^\)\]]*[\)\]]/
+    nonisolated(unsafe) private static let wsRegex = /\s+/
+    // A collaboration separator between two artists: a spaced word joiner (x/vs/and) or
+    // a punctuation joiner (× & , ; / +). Normalized to a single space for search.
+    nonisolated(unsafe) private static let artistSepRegex = /(?i)(?:\s+(?:x|vs|and)\b\.?|[×&,;\/+])\s*/
 
     /// Shared GET → decode helper (UA header, 200-only, best-effort).
     private static func get<T: Decodable>(_ url: URL) async -> T? {
