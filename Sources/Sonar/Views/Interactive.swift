@@ -302,53 +302,47 @@ struct TrackRowView: View {
                 }
             }
             Spacer(minLength: 4)
-            // Trailing controls as fixed columns so nothing shifts between rest and
-            // hover. The heart holds its own column and never moves — at rest a faint
-            // favorite indicator, on hover a live toggle, but always at the same x.
-            // The trailing column cross-fades three things in one fixed box: the
-            // duration (flush-right at rest), the trash (tucked in beside the heart
-            // on hover), and — when the list is manually reorderable — the drag
-            // handle pinned to the far corner, so hover fills the same right edge the
-            // duration held instead of leaving a hole there.
-            HStack(spacing: 3) {
-                if let onToggleFavorite {
-                    Button(action: onToggleFavorite) {
-                        Image(systemName: isFavorite ? "heart.fill" : "heart")
-                            .font(.system(size: 11))
-                            .foregroundStyle(isFavorite ? Theme.favorite : .white.opacity(0.6))
-                            .frame(width: 18, height: 20)
+            // Two overlaid layers, right-aligned, so the trailing edge is stable:
+            //  • the duration, flush-right, shown at rest;
+            //  • the hover controls — heart / trash / (drag, when reorderable) — as a
+            //    single evenly-spaced group pinned to the far corner.
+            // All three icons keep their slot at rest (only opacity changes), so the
+            // heart never drifts, the spacing between the icons is uniform, and the
+            // drag handle sits in the corner where the duration rests.
+            ZStack(alignment: .trailing) {
+                Text(durationText)
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+                    .opacity(hovering ? 0 : 1)
+                HStack(spacing: 6) {
+                    if let onToggleFavorite {
+                        Button(action: onToggleFavorite) {
+                            Image(systemName: isFavorite ? "heart.fill" : "heart")
+                                .font(.system(size: 11))
+                                .foregroundStyle(isFavorite ? Theme.favorite : .white.opacity(0.6))
+                                .frame(width: 18, height: 20)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
+                        // Visible at rest too, as a faint favorite indicator.
+                        .opacity(isFavorite || hovering ? 1 : 0)
+                        .allowsHitTesting(hovering)
                     }
-                    .buttonStyle(PressableButtonStyle())
-                    .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
-                    .opacity(isFavorite || hovering ? 1 : 0)
-                    .allowsHitTesting(hovering)
-                }
-                // Wide enough for long-mix durations (e.g. "84:36") on one line, and
-                // to keep the corner-pinned drag handle clear of the trash.
-                ZStack {
-                    Text(durationText)
-                        .font(.system(size: 10, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.4))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .opacity(hovering ? 0 : 1)
                     Button(action: onDelete) {
                         Image(systemName: "trash")
                             .font(.system(size: 11))
                             .foregroundStyle(.red.opacity(0.9))
-                            .frame(width: 20, height: 20)
+                            .frame(width: 18, height: 20)
                     }
                     .buttonStyle(PressableButtonStyle())
                     .help("Delete (move to Trash)")
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(hovering ? 1 : 0)
                     .allowsHitTesting(hovering)
-                    // Drag handle — pinned to the far corner (where the duration
-                    // rests), revealed on hover only while the list is reorderable.
                     if reorderID != nil {
                         DragDots()
                             .foregroundStyle(.white.opacity(0.55))
-                            .frame(width: 11, height: 18)
+                            .frame(width: 18, height: 18)
                             .contentShape(Rectangle())
                             .gesture(
                                 DragGesture(coordinateSpace: .named("reorder"))
@@ -356,12 +350,10 @@ struct TrackRowView: View {
                                     .onEnded { _ in onReorderEnded() }
                             )
                             .help("Drag to reorder")
-                            .frame(maxWidth: .infinity, alignment: .trailing)
                             .opacity(hovering ? 1 : 0)
                             .allowsHitTesting(hovering)
                     }
                 }
-                .frame(width: 40)
             }
         }
         .padding(.horizontal, 10)
