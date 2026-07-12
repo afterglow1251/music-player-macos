@@ -778,6 +778,7 @@ struct PlayerWindow: View {
             // Animate pills sliding in/out as playlists are created or deleted.
             .animation(.easeInOut(duration: 0.22), value: controller.playlists.playlists.count)
         }
+        .scrollIndicators(.never)
     }
 
     private func sourcePill(title: String, systemImage: String, selected: Bool,
@@ -1020,11 +1021,12 @@ struct PlayerWindow: View {
                 .padding(.horizontal, 6).padding(.vertical, 6)
                 .coordinateSpace(.named("reorder"))
                 .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
+                // Inside the ScrollView on purpose — see OverlayScrollerStyle.
+                .background(OverlayScrollerStyle())
             }
             .coordinateSpace(.named("libScroll"))
             .frame(height: fixedHeight)
             .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
-            .scrollIndicators(.hidden)
             // Measure the viewport height so a row can tell whether it's on screen.
             .background {
                 GeometryReader { geo in
@@ -1482,6 +1484,7 @@ struct PlayerWindow: View {
             }
             .padding(.horizontal, 2)
         }
+        .scrollIndicators(.never)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

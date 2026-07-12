@@ -67,6 +67,7 @@ struct LyricsView: View {
                 .padding(.horizontal, 22)
                 .frame(width: width, alignment: .leading)
             }
+            .scrollIndicators(.never)
             .onChange(of: activeIndex) { _, new in
                 guard let new else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {

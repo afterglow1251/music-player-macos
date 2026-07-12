@@ -29,7 +29,7 @@ struct SettingsView: View {
                 }
                 .padding(5)   // room for hover-scaled buttons
             }
-            .scrollIndicators(.hidden)
+            .scrollIndicators(.never)
         }
         .padding(14)
         .frame(width: width, height: height)
