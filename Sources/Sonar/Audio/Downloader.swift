@@ -109,13 +109,14 @@ final class Downloader: ObservableObject {
                     "-o", folder.appendingPathComponent("%(title)s [%(id)s].%(ext)s").path,
                     "--", trimmed]
 
-        let code = await run(executable: ytDlpPath, arguments: args)
+        let output = OutputBox()
+        let code = await run(executable: ytDlpPath, arguments: args, collect: { output.append($0) })
         if cancelled {
             status = "Cancelled"
             return nil
         }
         guard code == 0 else {
-            lastError = "Download failed — check the URL or run: brew upgrade yt-dlp"
+            lastError = Downloader.errorMessage(for: output.value)
             status = "Failed"
             return nil
         }
@@ -192,6 +193,39 @@ final class Downloader: ObservableObject {
             scanner = scanner[range.upperBound...]
         }
         return found
+    }
+
+    /// Map yt-dlp's raw output to a specific, user-facing failure message.
+    /// Falls back to the trimmed last non-empty line, or a generic message,
+    /// when nothing recognizable is found. Never returns blank.
+    nonisolated static func errorMessage(for output: String) -> String {
+        let lower = output.lowercased()
+        let signatures: [(needle: String, message: String)] = [
+            ("private video", "This video is private"),
+            ("video unavailable", "Video unavailable — it may have been removed"),
+            ("has been removed", "Video unavailable — it may have been removed"),
+            ("account associated with this video has been terminated", "Video unavailable — the uploader's account was terminated"),
+            ("not available in your country", "This video is region-locked and unavailable in your country"),
+            ("blocked it in your country", "This video is region-locked and unavailable in your country"),
+            ("sign in to confirm your age", "This video is age-restricted and requires sign-in"),
+            ("age-restricted", "This video is age-restricted and requires sign-in"),
+            ("sign in to confirm you're not a bot", "YouTube requires sign-in to confirm you're not a bot"),
+            ("temporary failure in name resolution", "Network error — check your internet connection"),
+            ("could not resolve host", "Network error — check your internet connection"),
+            ("network is unreachable", "Network error — check your internet connection"),
+            ("no space left on device", "Download failed — disk is full"),
+        ]
+        for (needle, message) in signatures where lower.contains(needle) {
+            return message
+        }
+        let lastLine = output
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty }
+        if let lastLine, !lastLine.isEmpty {
+            return lastLine
+        }
+        return "Download failed — check the URL or run: brew upgrade yt-dlp"
     }
 
     /// Only accept http/https — rejects empty schemes, `file:`, and anything
