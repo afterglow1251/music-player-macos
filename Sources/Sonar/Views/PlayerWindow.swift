@@ -797,10 +797,12 @@ struct PlayerWindow: View {
         if mods.contains(.command) {
             if !selectionIsExplicit {
                 // The current `selection` is just the playback-follow highlight, not
-                // a deliberate pick — the playing row already sits in it. Promote it
-                // to an explicit selection that includes this row rather than toggling
-                // the row back off, so ⌘-clicking the playing track outlines it.
-                selection.insert(track.id)
+                // a deliberate pick. ⌘-clicking the playing track itself should
+                // promote it to an explicit selection (rather than toggling it back
+                // off) so it outlines. ⌘-clicking any other track starts a fresh
+                // explicit selection with just that row — otherwise the playing
+                // track would silently tag along and outline as if also picked.
+                selection = track.id == controller.currentTrack?.id ? selection.union([track.id]) : [track.id]
                 selectionIsExplicit = true
             } else if selection.contains(track.id) {
                 selection.remove(track.id)
