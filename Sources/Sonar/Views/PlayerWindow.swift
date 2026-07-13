@@ -9,7 +9,9 @@ struct PlayerWindow: View {
     @State private var isFullscreen = false
     @State private var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
     @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
+    @State private var jumpGeneration = 0            // invalidates a pending "jump to current track" when the source changes
     @State private var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
+    @State private var pillShowToken = 0             // coalesces "show the pill" across a source switch's transient reports
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
     @State private var selectedTrackID: Track.ID?    // keyboard cursor (also the ⇧-click range anchor)
     /// The last row the user *deliberately* clicked (plain / ⌘ / ⇧) — the older of
@@ -1166,7 +1168,7 @@ struct PlayerWindow: View {
         // reports back (the report re-shows it if the row is genuinely out of
         // view). Same-source clicks keep the pill — the preference value won't
         // change, so no report would come to restore it.
-        if id != selectedPlaylistID { showNowPlayingPill = false }
+        if id != selectedPlaylistID { showNowPlayingPill = false; pillShowToken += 1 }
         selectedPlaylistID = id
         if id != nil { searchActive = false; searchText = "" }
     }
@@ -1386,7 +1388,27 @@ struct PlayerWindow: View {
             // pill exactly when the new layout has spoken.
             .onPreferenceChange(CurrentRowVisibleKey.self) { report in
                 guard let report, report.source == selectedPlaylistID else { return }
-                showNowPlayingPill = !report.visible
+                if report.visible {
+                    // Row on screen → hide now, and invalidate any pending "show".
+                    pillShowToken += 1
+                    showNowPlayingPill = false
+                } else {
+                    // Row reported off screen. Don't turn the pill on this instant:
+                    // a source switch settles over a couple of layout passes (offset
+                    // restore + the lazy stack materialising the current row's
+                    // marker), and the baseline "not visible" often lands one pass
+                    // before the marker's "visible" that will keep the pill hidden.
+                    // Turning on immediately would flash the pill for that one frame.
+                    // Defer the show by a runloop; a "visible" report arriving first
+                    // bumps the token and cancels it. Genuine off-screen rows (no
+                    // marker follows) still show, just imperceptibly later.
+                    pillShowToken += 1
+                    let token = pillShowToken
+                    DispatchQueue.main.async {
+                        guard pillShowToken == token, controller.currentTrack != nil else { return }
+                        showNowPlayingPill = true
+                    }
+                }
             }
             // Keep the cursor on the playing track: when playback advances (auto-
             // advance, next/prev), move the selection to it so the outline never
@@ -1430,15 +1452,28 @@ struct PlayerWindow: View {
                 let clip = sv.contentView
                 scrollMemory[oldID] = clip.bounds.origin.y
                 let target = scrollMemory[newID] ?? 0
+                // Invalidate any pending "jump to current track" from the outgoing
+                // source: a Now-playing tap fires a deferred proxy.scrollTo(currentID),
+                // and if the user switches source before it fires it would otherwise
+                // resolve against THIS new list and scroll it to a stray spot (and
+                // flash the pill).
+                jumpGeneration += 1
                 clip.bounds.origin = NSPoint(x: clip.bounds.origin.x, y: target)
                 sv.reflectScrolledClipView(clip)
             }
             .onChange(of: scrollToCurrentNonce) { _, _ in
                 guard let id = controller.currentTrack?.id else { return }
+                jumpGeneration += 1
+                let generation = jumpGeneration
+                let source = selectedPlaylistID
                 // Defer a runloop so anything we just cleared (search / filter) has
-                // laid out, then center the current track.
+                // laid out, then center the current track. Instant, not animated: a
+                // glide leaves a 0.3s window in which switching source would let the
+                // scroll bleed into the new list. Bail if the source changed (or
+                // another jump superseded us) before this ran.
                 DispatchQueue.main.async {
-                    withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: .center) }
+                    guard jumpGeneration == generation, selectedPlaylistID == source else { return }
+                    proxy.scrollTo(id, anchor: .center)
                 }
             }
             // Keep the keyboard cursor on screen — minimal scroll (nil anchor)
