@@ -18,6 +18,8 @@ struct PlayerWindow: View {
     /// it. An explicit selection outlines even the playing row.
     @State private var selectionIsExplicit = false
     @State private var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
+    @State private var suppressTopResetOnce = false  // skip the next source-switch scroll restore (goToCurrentTrack centres instead)
+    @State private var scrollMemory: [Playlist.ID?: CGFloat] = [:]  // per-source scroll offset, so each source reopens where you left it
     private static let listBottomAnchorID = "nav-list-bottom"  // tail scroll anchor for the last row
     private static let listTopAnchorID = "nav-list-top"        // head scroll anchor for the first row
     @State private var muteHovering = false           // mute button hover (driven by its AppKit catcher)
@@ -730,6 +732,7 @@ struct PlayerWindow: View {
         }
         if controller.favorites.filterActive { controller.favorites.setFilter(false) }
         if let playlist = selectedPlaylist, !controller.tracks(in: playlist).contains(current) {
+            suppressTopResetOnce = true   // we're about to centre on the track, not reset to top
             selectSource(nil)
         }
         scrollToCurrentNonce += 1
@@ -1383,6 +1386,36 @@ struct PlayerWindow: View {
                     selection = track.map { [$0.id] } ?? []
                     selectionIsExplicit = false   // playback-follow, not a user pick
                 }
+            }
+            // Switching source (LIBRARY ↔ playlist, or between playlists) reuses this
+            // one ScrollView, so the outgoing list's scroll offset would otherwise
+            // carry over — land you at the bottom of a list you just opened. Snap the
+            // new source back to its top. Instant (no animation) to match the clean
+            // header swap in selectSource; deferred a runloop so the new content has
+            // laid out before we address its top anchor.
+            .onChange(of: selectedPlaylistID) { oldID, newID in
+                // goToCurrentTrack switches source only to then centre on the playing
+                // track — don't fight it by restoring a remembered offset.
+                if suppressTopResetOnce { suppressTopResetOnce = false; return }
+                // All sources share this one ScrollView, so without help the outgoing
+                // list's offset carries into the incoming one. Instead give each source
+                // its own memory: stash where we're leaving, restore where we're going
+                // (top for a never-visited source).
+                //
+                // Do it SYNCHRONOUSLY, straight on the clip view's bounds — not a
+                // deferred scroll(to:). SwiftUI keeps the clip offset across the content
+                // swap (that's the very leak we're fixing), so writing the target here
+                // lands in the same commit as the new content: no extra frame, no
+                // pixel-nudge jitter, no layout report that would blink the pill.
+                // Setting bounds.origin directly (vs scroll(to:), which clamps to the
+                // still-present old content) is safe because the remembered offset
+                // always belongs to the incoming source's own content.
+                guard let sv = autoScroller.scrollView else { return }
+                let clip = sv.contentView
+                scrollMemory[oldID] = clip.bounds.origin.y
+                let target = scrollMemory[newID] ?? 0
+                clip.bounds.origin = NSPoint(x: clip.bounds.origin.x, y: target)
+                sv.reflectScrolledClipView(clip)
             }
             .onChange(of: scrollToCurrentNonce) { _, _ in
                 guard let id = controller.currentTrack?.id else { return }
