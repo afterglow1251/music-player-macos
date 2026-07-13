@@ -693,7 +693,7 @@ struct PlayerWindow: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
                 // Contextual "jump to the playing track" — only while it's off-screen.
-                if controller.currentTrack != nil, showNowPlayingPill {
+                if currentTrackInSource, showNowPlayingPill {
                     nowPlayingPill
                         .transition(.opacity)
                 }
@@ -1042,6 +1042,21 @@ struct PlayerWindow: View {
         return controller.tracks(in: playlist)
     }
 
+    /// Whether the currently-playing track actually belongs to the list on screen.
+    /// The "Now playing" pill is an offer to jump *to that track inside this list*,
+    /// so it must never appear in a source that doesn't hold it. This is the root
+    /// gate the pill was missing: its geometry signal (a marker behind the current
+    /// row) can't tell "scrolled off-screen" from "not in this list" — both render
+    /// no marker, both read as not-visible — so without this check the pill stuck
+    /// on forever in any playlist that didn't contain the playing track.
+    private var currentTrackInSource: Bool {
+        guard let current = controller.currentTrack else { return false }
+        // Library reaches every played track (playback scope is the library), and
+        // goToCurrentTrack clears any search/favorites filter before scrolling.
+        guard let playlist = selectedPlaylist else { return true }
+        return controller.tracks(in: playlist).contains { $0.id == current.id }
+    }
+
     /// Pills that switch the track list between the library and each playlist,
     /// plus a "＋" to make a new one.
     private var sourceBar: some View {
@@ -1121,7 +1136,7 @@ struct PlayerWindow: View {
             }
             // Same "jump to the playing track" offer as the library header — shown
             // only while the current track is scrolled out of this playlist's view.
-            if controller.currentTrack != nil, showNowPlayingPill {
+            if currentTrackInSource, showNowPlayingPill {
                 nowPlayingPill
                     .transition(.opacity)
             }
@@ -1388,8 +1403,9 @@ struct PlayerWindow: View {
             // pill exactly when the new layout has spoken.
             .onPreferenceChange(CurrentRowVisibleKey.self) { report in
                 guard let report, report.source == selectedPlaylistID else { return }
-                if report.visible {
-                    // Row on screen → hide now, and invalidate any pending "show".
+                if report.visible || !currentTrackInSource {
+                    // Row on screen, or the playing track isn't in this list at all
+                    // → no pill. Hide now and invalidate any pending "show".
                     pillShowToken += 1
                     showNowPlayingPill = false
                 } else {
