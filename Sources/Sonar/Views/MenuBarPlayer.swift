@@ -373,6 +373,8 @@ private struct MiniPlayerView: View {
     private let accent = Theme.accent
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
+    /// Debounces scroll-driven seeks; see `ScrollSeekDebounce`.
+    @State private var scrollSeek = ScrollSeekDebounce()
 
     var body: some View {
         VStack(spacing: 10) {
@@ -451,6 +453,7 @@ private struct MiniPlayerView: View {
                 ),
                 in: 0...max(clock.duration, 0.01),
                 onEditingChanged: { editing in
+                    if editing { scrollSeek.cancel() }   // the drag owns the scrub now
                     isScrubbing = editing
                     if !editing { engine.seek(to: scrubTime) }
                 }
@@ -467,11 +470,19 @@ private struct MiniPlayerView: View {
         }
         // Scroll (wheel or trackpad) over the whole seek strip — the mini
         // slider alone is a sliver of a target — to nudge playback ±3s per
-        // detent, same as the main window's seek bar.
+        // detent, same as the main window's seek bar. Each event only moves the
+        // scrub position; the one real seek commits once the gesture goes quiet
+        // — see `ScrollSeekDebounce` for why.
         .contentShape(Rectangle())
         .scrollToAdjust { units in
-            guard clock.duration > 0, !isScrubbing else { return }
-            engine.seek(to: min(max(clock.currentTime + units * 3, 0), clock.duration))
+            guard clock.duration > 0 else { return }
+            let base = isScrubbing ? scrubTime : clock.currentTime
+            scrubTime = min(max(base + units * 3, 0), clock.duration)
+            isScrubbing = true
+            scrollSeek.schedule {
+                engine.seek(to: scrubTime)
+                isScrubbing = false
+            }
         }
     }
 
