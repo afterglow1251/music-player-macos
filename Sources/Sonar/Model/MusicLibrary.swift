@@ -121,14 +121,20 @@ final class MusicLibrary: ObservableObject {
 
     // MARK: Staging (in-flight downloads)
 
-    /// A fresh hidden staging directory (`folder/.staging/<uuid>`) for one
-    /// in-flight download. yt-dlp writes its intermediates here, where the
-    /// watcher never sees them (`.skipsHiddenFiles` blocks descent into
-    /// `.staging`), so no half-written row ever appears in the library. Returns
-    /// nil if the directory can't be created.
+    /// The download staging root, `folder/.sonar/staging`, a sibling of the
+    /// `lyrics/` and `waveforms/` caches under the shared hidden `.sonar/` dir.
+    private var stagingRoot: URL {
+        folder.appendingPathComponent(".sonar", isDirectory: true)
+            .appendingPathComponent("staging", isDirectory: true)
+    }
+
+    /// A fresh staging directory (`.sonar/staging/<uuid>`) for one in-flight
+    /// download. yt-dlp writes its intermediates here, where the watcher never
+    /// sees them (`.skipsHiddenFiles` blocks descent into the hidden `.sonar`
+    /// parent), so no half-written row ever appears in the library. Returns nil
+    /// if the directory can't be created.
     func makeStagingDir() -> URL? {
-        let dir = folder.appendingPathComponent(".staging", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let dir = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
@@ -143,12 +149,15 @@ final class MusicLibrary: ObservableObject {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    /// Clear the whole `.staging` tree. Any survivor is from a download an
-    /// earlier session didn't finish (crash/quit), so it's junk. Called once
-    /// from `init` after the folder is resolved.
+    /// Clear the whole staging tree. Any survivor is from a download an earlier
+    /// session didn't finish (crash/quit), so it's junk. Called once from `init`
+    /// after the folder is resolved.
+    ///
+    /// Removes exactly `.sonar/staging` — NEVER the parent `.sonar`, which also
+    /// holds the persistent `lyrics/` (network-fetched!) and `waveforms/` caches.
+    /// Widening this to the parent would silently wipe them on every launch.
     func sweepOrphanedStaging() {
-        let staging = folder.appendingPathComponent(".staging", isDirectory: true)
-        try? FileManager.default.removeItem(at: staging)
+        try? FileManager.default.removeItem(at: stagingRoot)
     }
 
     /// Move a finished, staged file into the library and register it — the

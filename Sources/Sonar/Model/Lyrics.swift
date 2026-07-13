@@ -35,16 +35,18 @@ enum LyricsProvider {
         return lines.parsed
     }
 
-    // MARK: On-disk cache (hidden `.sonar/` folder beside the audio)
+    // MARK: On-disk cache (hidden `.sonar/lyrics/` folder beside the audio)
 
-    /// The cache file for a track: `<audio dir>/.sonar/<audio filename>.lrc`.
-    /// A hidden per-folder subdirectory keeps the music folder itself clean while
-    /// the cache still travels with the library and works offline. Keying on the
-    /// full filename (extension included) avoids collisions between same-named
-    /// tracks of different formats.
+    /// The cache file for a track: `<audio dir>/.sonar/lyrics/<audio filename>.lrc`.
+    /// A typed subfolder of the shared hidden `.sonar/` dir (alongside `waveforms/`
+    /// and the download `staging/`) keeps the music folder itself clean while the
+    /// cache still travels with the library and works offline. Keying on the full
+    /// filename (extension included) avoids collisions between same-named tracks of
+    /// different formats.
     private static func cacheURL(for audio: URL) -> URL {
         audio.deletingLastPathComponent()
             .appendingPathComponent(".sonar", isDirectory: true)
+            .appendingPathComponent("lyrics", isDirectory: true)
             .appendingPathComponent(audio.lastPathComponent)
             .appendingPathExtension("lrc")
     }

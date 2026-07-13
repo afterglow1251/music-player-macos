@@ -100,14 +100,16 @@ enum WaveformProvider {
         return Waveform(peaks: peaks)
     }
 
-    // MARK: On-disk cache (hidden `.sonar/` folder beside the audio)
+    // MARK: On-disk cache (hidden `.sonar/waveforms/` folder beside the audio)
 
-    /// `<audio dir>/.sonar/<audio filename>.waveform` — same hidden per-folder
-    /// subdirectory the lyrics cache uses, keyed on the full filename (extension
-    /// included) so same-named tracks of different formats don't collide.
+    /// `<audio dir>/.sonar/waveforms/<audio filename>.waveform` — a typed
+    /// subfolder of the shared hidden `.sonar/` dir (alongside `lyrics/` and the
+    /// download `staging/`), keyed on the full filename (extension included) so
+    /// same-named tracks of different formats don't collide.
     private nonisolated static func cacheURL(for audio: URL) -> URL {
         audio.deletingLastPathComponent()
             .appendingPathComponent(".sonar", isDirectory: true)
+            .appendingPathComponent("waveforms", isDirectory: true)
             .appendingPathComponent(audio.lastPathComponent)
             .appendingPathExtension("waveform")
     }
