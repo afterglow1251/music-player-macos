@@ -69,6 +69,10 @@ enum WaveformProvider {
 
         var peaks = [Float](repeating: 0, count: columns)
         for i in 0..<columns {
+            // Bail mid-scan when the track has moved on — the caller cancels this
+            // task on every track change, so rapid next/prev doesn't run several
+            // full-file scans to completion in parallel.
+            if Task.isCancelled { return nil }
             file.framePosition = AVAudioFramePosition(i) * framesPerBucket
             buffer.frameLength = 0
             do { try file.read(into: buffer, frameCount: window) } catch { break }
