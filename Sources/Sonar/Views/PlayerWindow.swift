@@ -895,6 +895,16 @@ struct PlayerWindow: View {
                 selectionButton("text.append", help: "Add to Queue") {
                     withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(tracks) }
                 }
+                // text.badge.minus pairs with the Add to Playlist badge above;
+                // xmark is taken by Clear selection.
+                if let playlist = selectedPlaylist {
+                    selectionButton("text.badge.minus", help: "Remove from Playlist") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            for t in tracks { controller.playlists.remove(path: t.url.path, from: playlist.id) }
+                            selection.removeAll()
+                        }
+                    }
+                }
                 selectionButton("trash", help: "Delete", tint: .red.opacity(0.9)) { deleteSelection() }
 
                 Divider().frame(height: 15).overlay(Color.white.opacity(0.15)).padding(.horizontal, 4)
