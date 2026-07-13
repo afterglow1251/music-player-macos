@@ -925,7 +925,10 @@ struct PlayerWindow: View {
                 .menuStyle(.button).buttonStyle(PressableButtonStyle()).menuIndicator(.hidden).fixedSize()
                 .tooltip("Add to Playlist")
                 // text.badge.minus pairs with the Add to Playlist badge above;
-                // xmark is taken by Clear selection.
+                // xmark is taken by Clear selection. Inside a playlist the quick
+                // action removes the entries from the list — permanent delete stays
+                // a Library-only action (mirrors the row's hover control) so a tap
+                // here can't be mistaken for wiping the file.
                 if let playlist = selectedPlaylist {
                     selectionButton("text.badge.minus", help: "Remove from Playlist") {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -933,8 +936,9 @@ struct PlayerWindow: View {
                             selection.removeAll()
                         }
                     }
+                } else {
+                    selectionButton("trash", help: "Delete", tint: .red.opacity(0.9)) { deleteSelection() }
                 }
-                selectionButton("trash", help: "Delete", tint: .red.opacity(0.9)) { deleteSelection() }
 
                 Divider().frame(height: 15).overlay(Color.white.opacity(0.15)).padding(.horizontal, 4)
                 selectionButton("xmark", help: "Clear selection", size: 11) {
