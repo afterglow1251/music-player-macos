@@ -11,7 +11,13 @@ struct PlayerWindow: View {
     @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
     @State private var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
-    @State private var selectedTrackID: Track.ID?    // keyboard cursor + range anchor for ⇧-click
+    @State private var selectedTrackID: Track.ID?    // keyboard cursor (also the ⇧-click range anchor)
+    /// The last row the user *deliberately* clicked (plain / ⌘ / ⇧) — the older of
+    /// the "last two" picks. A ⇧-click selects the range between it and the newly
+    /// clicked row. Set only by real clicks (and keyboard nav), never by
+    /// playback-follow, so the currently-playing track never silently acts as a
+    /// range end. Nil before any click.
+    @State private var lastClickedID: Track.ID?
     @State private var selection: Set<Track.ID> = [] // multi-selection for bulk actions (⌘/⇧-click)
     /// True when `selection` was made deliberately (⌘/⇧-click, ⌘A, arrow keys) as
     /// opposed to falling out of a click-to-play or playback-follow, which also set
@@ -766,6 +772,7 @@ struct PlayerWindow: View {
             index = delta > 0 ? 0 : tracks.count - 1
         }
         selectedTrackID = tracks[index].id
+        lastClickedID = tracks[index].id   // keep the ⇧-click anchor on the keyboard cursor
         selection = [tracks[index].id]   // arrow keys collapse any multi-selection to the cursor
         selectionIsExplicit = true
         scrollToSelectionNonce += 1   // only keyboard nav scrolls; playback-follow doesn't
@@ -786,6 +793,7 @@ struct PlayerWindow: View {
     /// continue from there. Also collapses any multi-selection to this one row.
     private func selectAndPlay(_ track: Track, in scope: [Track]?) {
         selectedTrackID = track.id
+        lastClickedID = track.id
         selection = [track.id]
         selectionIsExplicit = false   // side effect of playing, not a deliberate pick
         controller.play(track, in: scope)
@@ -812,15 +820,23 @@ struct PlayerWindow: View {
             } else {
                 selection.insert(track.id)
             }
-            selectedTrackID = track.id   // anchor follows the last ⌘-click
-        } else if mods.contains(.shift), let anchor = selectedTrackID {
+            selectedTrackID = track.id   // the ⌘-click becomes the latest pick
+            lastClickedID = track.id
+        } else if mods.contains(.shift) {
+            // Range between the two most recent picks: the last deliberately
+            // clicked row and this one. With no prior click (fresh view — the
+            // playing row doesn't count) this just selects the clicked row and
+            // seeds the anchor, so the *next* ⇧-click ranges out from here.
             let tracks = navigableTracks
-            if let a = tracks.firstIndex(where: { $0.id == anchor }),
+            let anchorID = lastClickedID ?? track.id
+            if let a = tracks.firstIndex(where: { $0.id == anchorID }),
                let b = tracks.firstIndex(where: { $0.id == track.id }) {
                 let range = a <= b ? a...b : b...a
-                selection = Set(tracks[range].map { $0.id })   // anchor stays fixed for further ⇧-clicks
+                selection = Set(tracks[range].map { $0.id })
                 selectionIsExplicit = true
             }
+            lastClickedID = track.id      // this click is now the newest of the "last two"
+            selectedTrackID = track.id
         } else {
             selectAndPlay(track, in: scope)
         }
@@ -2329,6 +2345,9 @@ private struct WaveformSeekBar: View {
     /// on a playback tick. See `barsPath`.
     @State private var cache = BarsCache()
 
+    /// Debounces scroll-driven seeks; see `ScrollSeekDebounce`.
+    @State private var scrollSeek = ScrollSeekDebounce()
+
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
@@ -2372,6 +2391,7 @@ private struct WaveformSeekBar: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         guard duration > 0 else { return }
+                        scrollSeek.cancel()   // the drag owns the scrub now
                         isScrubbing = true
                         scrubTime = min(max(value.location.x / width, 0), 1) * duration
                     }
@@ -2382,10 +2402,18 @@ private struct WaveformSeekBar: View {
                         isScrubbing = false
                     }
             )
-            // Scroll over the bar to seek ±~3s per detent.
+            // Scroll over the bar to seek ±~3s per detent. Each event only moves
+            // the scrub position; the one real seek commits once the gesture goes
+            // quiet — see `ScrollSeekDebounce` for why.
             .scrollToAdjust { units in
-                guard duration > 0, !isScrubbing else { return }
-                engine.seek(to: min(max(clock.currentTime + units * 3, 0), duration))
+                guard duration > 0 else { return }
+                let base = isScrubbing ? scrubTime : clock.currentTime
+                scrubTime = min(max(base + units * 3, 0), duration)
+                isScrubbing = true
+                scrollSeek.schedule {
+                    engine.seek(to: scrubTime)
+                    isScrubbing = false
+                }
             }
         }
         .frame(height: 30)

@@ -721,6 +721,39 @@ extension View {
     }
 }
 
+/// Debounced commit for scroll-driven seeking. A fast trackpad flick delivers
+/// dozens of scroll events a second, and seeking on each one stops/restarts the
+/// player node mid-buffer — every cut is an audible click, in aggregate a
+/// crackling squeal. So the seek bars move only the visual scrub position per
+/// event and hand the real `engine.seek` to `schedule`, which fires it once the
+/// event stream has stayed quiet for `settleDelay`.
+@MainActor
+final class ScrollSeekDebounce {
+    /// How long the scroll must stay quiet before the seek commits: longer than
+    /// the gaps between events inside one continuous flick (a few ms apart, up
+    /// to tens of ms through the momentum tail), short enough that a single
+    /// wheel detent still lands as good as instantly.
+    private static let settleDelay: Duration = .milliseconds(180)
+
+    private var pending: Task<Void, Never>?
+
+    /// Replace any pending commit with `commit`, to run after the quiet gap.
+    func schedule(_ commit: @escaping @MainActor () -> Void) {
+        pending?.cancel()
+        pending = Task { @MainActor in
+            try? await Task.sleep(for: Self.settleDelay)
+            guard !Task.isCancelled else { return }
+            commit()
+        }
+    }
+
+    /// Drop the pending commit (a drag gesture is taking over the scrub).
+    func cancel() {
+        pending?.cancel()
+        pending = nil
+    }
+}
+
 /// One row in the "Up Next" queue — compact, numbered, with a remove button on hover.
 struct QueueRowView: View {
     let track: Track
