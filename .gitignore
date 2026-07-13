@@ -3,6 +3,10 @@
 *.xcodeproj
 .swiftpm/
 
+# App bundle build artifacts (produced by build-app.sh)
+Sonar.app/
+Sonar.iconset/
+
 # macOS
 .DS_Store
 
