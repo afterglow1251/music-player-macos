@@ -38,6 +38,16 @@ final class MenuBarController {
     private var clickMonitor: Any?
     private var pressMonitor: Any?
     private var isPanelOpen = false
+    /// Set true the first time the panel's occlusion becomes `.visible` after an
+    /// open. The occlusion-driven dismiss only arms once this is true, so the
+    /// initial not-visible→visible transition of opening can't dismiss the panel
+    /// it's still bringing on screen.
+    private var panelDidAppear = false
+    /// The app that owned focus when the panel was opened. A non-activating panel
+    /// leaves that app frontmost, and opening over another app's fullscreen Space
+    /// makes that app re-post `didActivateApplication` — which must NOT close the
+    /// panel. Only activation of a *different* app (a real Cmd-Tab away) does.
+    private var frontmostAppAtOpen: pid_t?
 
     private lazy var panel: NSPanel = {
         let p = KeyAppearancePanel(
@@ -48,10 +58,15 @@ final class MenuBarController {
         )
         p.isFloatingPanel = true
         p.level = .popUpMenu
-        // .canJoinAllSpaces (not .fullScreenAuxiliary, which only pairs a window
-        // with *this app's own* fullscreen window) is what lets a menu-bar-anchored
-        // panel stay interactive while some *other* app owns the fullscreen Space.
-        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        // `.transient`, NOT `.stationary` — they're mutually exclusive flavors of
+        // the same window-management group. `.stationary` is desktop-widget
+        // semantics: the WindowServer pins such windows to the desktop backdrop
+        // and refuses to composite them over another app's fullscreen Space, so
+        // the panel "opened" where you couldn't see it (occlusion never became
+        // .visible). `.transient` is what native popup menus use, and those render
+        // over fullscreen apps just fine. `.fullScreenAuxiliary` additionally
+        // admits the panel onto the active fullscreen Space.
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         p.hasShadow = true
         p.isOpaque = false
         p.backgroundColor = .clear
@@ -80,20 +95,29 @@ final class MenuBarController {
         )
         p.contentViewController = hosting
 
-        // Dismiss the moment a Spaces swipe / Mission Control gesture starts.
-        // During those transitions the WindowServer hides stationary
-        // all-spaces windows like this panel, which flips its occlusion state
-        // to not-visible — the earliest signal we get that a space gesture
-        // began. Without this, a half-swipe that snaps back would "restore" a
-        // panel the user expected gone (native popovers close for good), and a
-        // completed swipe only closed it ~1s later via app-activation.
+        // Dismiss when a Spaces swipe / Mission Control gesture hides the panel.
+        // During those transitions the WindowServer takes windows like this
+        // panel off screen, which flips its occlusion state to not-visible —
+        // the earliest signal we get that a space gesture began. Without this,
+        // a half-swipe that snaps back would "restore" a panel the user
+        // expected gone (native popovers close for good), and a completed
+        // swipe only closed it ~1s later via app-activation.
         NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification, object: p, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.isPanelOpen,
-                      !self.panel.occlusionState.contains(.visible)
-                else { return }
+                guard let self, self.isPanelOpen else { return }
+                let visible = self.panel.occlusionState.contains(.visible)
+                if visible {
+                    // The panel has actually landed on screen — arm the dismiss.
+                    self.panelDidAppear = true
+                    return
+                }
+                // Only a visible→not-visible transition (a real Spaces swipe /
+                // Mission Control move that hides the panel) closes it. The
+                // not-visible state *before* the panel has ever appeared is just
+                // the opening transition and must be ignored.
+                guard self.panelDidAppear else { return }
                 self.dismiss()
             }
         }
@@ -159,30 +183,37 @@ final class MenuBarController {
         // `willResignActiveNotification` only fires when SONAR ITSELF was the
         // active app — but the panel is a `.nonactivatingPanel`, so opening it
         // from the menu bar never activates Sonar. The common case is: some
-        // other app is active, you open the panel, then swipe/switch to a
+        // other app is active, you open the panel, then switch (Cmd-Tab) to a
         // different app — Sonar's active state never changes, so that
-        // notification never fires and the panel is only closed later by
-        // whatever unrelated click happens to hit the global click monitor.
-        // Watching the workspace-wide "an app became active" notification
-        // catches this regardless of whether Sonar was ever active.
+        // notification never fires. Watching the workspace-wide "an app became
+        // active" notification catches this regardless of whether Sonar was ever
+        // active.
+        //
+        // But we must ignore the app that was already frontmost when the panel
+        // opened. Opening a non-activating panel over another app's fullscreen
+        // Space makes THAT app re-post `didActivateApplication`, which would
+        // otherwise slam the panel shut the instant it appears. Only a switch to
+        // a genuinely *different* app is a real move away that should close it.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] notification in
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.processIdentifier != ProcessInfo.processInfo.processIdentifier
             else { return }
-            MainActor.assumeIsolated { self?.dismiss() }
+            MainActor.assumeIsolated {
+                guard let self, self.isPanelOpen,
+                      app.processIdentifier != self.frontmostAppAtOpen
+                else { return }
+                self.dismiss()
+            }
         }
 
-        // Backstop for space switches the occlusion observer (on the panel)
-        // might miss — e.g. Ctrl+arrow or clicking a Space in Mission Control.
-        // Fires when the switch commits, which still beats waiting for the
-        // other app's activation notification.
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dismiss() }
-        }
+        // NOTE: no `activeSpaceDidChangeNotification` observer. It fired on every
+        // switch to a fullscreen app (each is its own Space) — including the
+        // Space churn caused by the panel's own appearance — and slammed the
+        // panel shut. Real Spaces swipes are handled by the occlusion observer:
+        // the WindowServer hides the panel mid-swipe, flipping it visible→
+        // not-visible, which is what closes it.
 
         // Keep the panel's "show main window" button hidden whenever it'd have
         // nothing to do — i.e. whenever the main window is already the frontmost,
@@ -247,6 +278,8 @@ final class MenuBarController {
         guard let button = statusItem.button else { return }
         if panel.isVisible {
             isPanelOpen = false
+            panelDidAppear = false
+            frontmostAppAtOpen = nil
             panel.orderOut(sender)
             setOpenIndication(false)
             removeClickMonitor()
@@ -265,6 +298,11 @@ final class MenuBarController {
                 x: screenRect.midX - panel.frame.width / 2,
                 y: screenRect.minY - panel.frame.height - 4
             ))
+            // Reset the "has appeared" latch and record who owns focus, BEFORE
+            // ordering front — opening can synchronously post the occlusion /
+            // activation notifications the dismiss logic reads.
+            panelDidAppear = false
+            frontmostAppAtOpen = NSWorkspace.shared.frontmostApplication?.processIdentifier
             panel.orderFrontRegardless()
             // NOTE: deliberately NOT making the panel key. Becoming key triggers a
             // key-window change that redraws the status button mid-click and blinks
@@ -305,6 +343,8 @@ final class MenuBarController {
 
     private func dismiss() {
         isPanelOpen = false
+        panelDidAppear = false
+        frontmostAppAtOpen = nil
         panel.orderOut(nil)
         setOpenIndication(false)
         removeClickMonitor()
