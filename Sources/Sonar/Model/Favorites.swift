@@ -37,6 +37,14 @@ final class FavoritesStore: ObservableObject {
         prefs.favorites = Array(paths)
     }
 
+    /// Favorite or unfavorite many paths at once, persisting a single time — the
+    /// bulk counterpart to `toggle` (multi-select "Add/Remove from Favorites").
+    func setFavorite(_ batch: Set<String>, to favorite: Bool) {
+        guard !batch.isEmpty else { return }
+        if favorite { paths.formUnion(batch) } else { paths.subtract(batch) }
+        prefs.favorites = Array(paths)
+    }
+
     /// Turn the "favorites only" filter on or off. Persisted so it survives relaunch.
     func setFilter(_ on: Bool) {
         guard on != filterActive else { return }

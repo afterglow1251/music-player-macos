@@ -253,6 +253,28 @@ struct PlaylistMenuItem: Identifiable {
     let add: () -> Void
 }
 
+/// When a row is part of a multi-selection, its context menu swaps the single-track
+/// actions for these, each operating on the whole selection. Non-nil only on a
+/// selected row while more than one row is selected; otherwise the row shows its
+/// normal single-track menu.
+struct BulkRowMenu {
+    let count: Int
+    /// Whether every / any selected track is already favorited — decides which of
+    /// "Add to Favorites" / "Remove from Favorites" to offer.
+    let allFavorited: Bool
+    let anyFavorited: Bool
+    let onPlayNext: () -> Void
+    let onAddToQueue: () -> Void
+    let onFavorite: () -> Void
+    let onUnfavorite: () -> Void
+    /// Each entry adds ALL selected tracks to that playlist.
+    let addToPlaylists: [PlaylistMenuItem]
+    let onNewPlaylistWithSelection: (() -> Void)?
+    /// Non-nil only inside a playlist view — removes the selection from it.
+    let onRemoveFromPlaylist: (() -> Void)?
+    let onDelete: () -> Void
+}
+
 /// A quick horizontal wiggle — flags "this is already here" without words. Drive
 /// `animatableData` 0→1 (one burst = `shakes` bumps) with an animation.
 ///
@@ -322,6 +344,9 @@ struct TrackRowView: View {
     var isFavorite: Bool = false
     /// Toggle favorite. nil hides the heart entirely (e.g. contexts without a store).
     var onToggleFavorite: (() -> Void)? = nil
+    /// Non-nil when this row is part of a multi-selection — swaps the context menu
+    /// for selection-wide actions. The row's click/hover behaviour is unchanged.
+    var bulk: BulkRowMenu? = nil
     private let accent = Theme.accent
 
     @State private var hovering = false
@@ -418,56 +443,93 @@ struct TrackRowView: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: onTap)
-        .contextMenu {
-            Button("Play", action: onTap)
-            Button("Play Next", action: onPlayNext)
-            if queueHasItems {
-                Button("Add to Queue", action: onAddToQueue)
+        .contextMenu { if let bulk { bulkMenu(bulk) } else { singleMenu } }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+
+    /// The normal single-track context menu.
+    @ViewBuilder private var singleMenu: some View {
+        Button("Play", action: onTap)
+        Button("Play Next", action: onPlayNext)
+        if queueHasItems {
+            Button("Add to Queue", action: onAddToQueue)
+        }
+        if let onToggleFavorite {
+            Button(action: onToggleFavorite) {
+                Label(isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                      systemImage: isFavorite ? "heart.slash" : "heart")
             }
-            if let onToggleFavorite {
-                Button(action: onToggleFavorite) {
-                    Label(isFavorite ? "Remove from Favorites" : "Add to Favorites",
-                          systemImage: isFavorite ? "heart.slash" : "heart")
-                }
-            }
-            if !addToPlaylists.isEmpty || onNewPlaylistWithTrack != nil {
-                Menu("Add to Playlist") {
-                    ForEach(addToPlaylists) { item in
-                        Button(action: item.add) {
-                            if item.contains {
-                                Label(item.name, systemImage: "checkmark")
-                            } else {
-                                Text(item.name)
-                            }
+        }
+        if !addToPlaylists.isEmpty || onNewPlaylistWithTrack != nil {
+            Menu("Add to Playlist") {
+                ForEach(addToPlaylists) { item in
+                    Button(action: item.add) {
+                        if item.contains {
+                            Label(item.name, systemImage: "checkmark")
+                        } else {
+                            Text(item.name)
                         }
                     }
-                    if let onNewPlaylistWithTrack {
-                        if !addToPlaylists.isEmpty { Divider() }
-                        Button("New Playlist…", action: onNewPlaylistWithTrack)
-                    }
+                }
+                if let onNewPlaylistWithTrack {
+                    if !addToPlaylists.isEmpty { Divider() }
+                    Button("New Playlist…", action: onNewPlaylistWithTrack)
                 }
             }
-            Divider()
-            Button { copyToClipboard(track.displayTitle) } label: {
-                Label("Copy Title", systemImage: "doc.on.doc")
-            }
-            if !track.artist.isEmpty {
-                Button { copyToClipboard(track.artist) } label: {
-                    Label("Copy Artist", systemImage: "person")
-                }
-            }
-            if let youtubeURL = track.youtubeURL {
-                Button { openInBrowser(youtubeURL) } label: {
-                    Label("Open on YouTube", systemImage: "arrow.up.forward.square")
-                }
-            }
-            Divider()
-            if let onRemoveFromPlaylist {
-                Button("Remove from Playlist", role: .destructive, action: onRemoveFromPlaylist)
-            }
-            Button("Delete", role: .destructive, action: onDelete)
         }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        Divider()
+        Button { copyToClipboard(track.displayTitle) } label: {
+            Label("Copy Title", systemImage: "doc.on.doc")
+        }
+        if !track.artist.isEmpty {
+            Button { copyToClipboard(track.artist) } label: {
+                Label("Copy Artist", systemImage: "person")
+            }
+        }
+        if let youtubeURL = track.youtubeURL {
+            Button { openInBrowser(youtubeURL) } label: {
+                Label("Open on YouTube", systemImage: "arrow.up.forward.square")
+            }
+        }
+        Divider()
+        if let onRemoveFromPlaylist {
+            Button("Remove from Playlist", role: .destructive, action: onRemoveFromPlaylist)
+        }
+        Button("Delete", role: .destructive, action: onDelete)
+    }
+
+    /// The multi-selection menu: every action applies to all selected tracks.
+    @ViewBuilder private func bulkMenu(_ bulk: BulkRowMenu) -> some View {
+        Button("Play Next (\(bulk.count))", action: bulk.onPlayNext)
+        if queueHasItems {
+            Button("Add \(bulk.count) to Queue", action: bulk.onAddToQueue)
+        }
+        if !bulk.allFavorited {
+            Button { bulk.onFavorite() } label: {
+                Label("Add \(bulk.count) to Favorites", systemImage: "heart")
+            }
+        }
+        if bulk.anyFavorited {
+            Button { bulk.onUnfavorite() } label: {
+                Label("Remove from Favorites", systemImage: "heart.slash")
+            }
+        }
+        if !bulk.addToPlaylists.isEmpty || bulk.onNewPlaylistWithSelection != nil {
+            Menu("Add to Playlist") {
+                ForEach(bulk.addToPlaylists) { item in
+                    Button(item.name, action: item.add)
+                }
+                if let onNew = bulk.onNewPlaylistWithSelection {
+                    if !bulk.addToPlaylists.isEmpty { Divider() }
+                    Button("New Playlist…", action: onNew)
+                }
+            }
+        }
+        Divider()
+        if let onRemove = bulk.onRemoveFromPlaylist {
+            Button("Remove \(bulk.count) from Playlist", role: .destructive, action: onRemove)
+        }
+        Button("Delete \(bulk.count) Tracks", role: .destructive, action: bulk.onDelete)
     }
 
     private var background: Color {

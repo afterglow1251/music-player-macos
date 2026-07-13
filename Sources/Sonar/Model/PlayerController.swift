@@ -293,13 +293,44 @@ final class PlayerController: ObservableObject {
         queue.removeAll { $0.track == track }
     }
 
+    /// Delete several tracks (multi-select). Each goes through the same failure-
+    /// aware path as the single delete: a track whose Trash move fails stays in the
+    /// library, and the toast reports how many couldn't be trashed.
+    func delete(_ tracks: [Track]) {
+        var failed = 0
+        var stoppedCurrent = false
+        for track in tracks {
+            guard library.delete(track) else { failed += 1; continue }
+            if currentTrack == track {
+                engine.stop()
+                currentTrack = nil
+                stoppedCurrent = true
+            }
+            queue.removeAll { $0.track == track }
+        }
+        if stoppedCurrent { updateNowPlaying() }
+        if failed > 0 {
+            downloader.lastError = "Couldn't move \(failed) track\(failed == 1 ? "" : "s") to the Trash"
+        }
+    }
+
     // MARK: Queue
 
     /// Insert a track at the front of the queue — it plays right after the current one.
     func playNext(_ track: Track) { queue.insert(QueueItem(track: track), at: 0) }
 
+    /// Queue several tracks to play next, preserving their order (multi-select).
+    func playNext(_ tracks: [Track]) {
+        queue.insert(contentsOf: tracks.map { QueueItem(track: $0) }, at: 0)
+    }
+
     /// Append a track to the end of the queue.
     func addToQueue(_ track: Track) { queue.append(QueueItem(track: track)) }
+
+    /// Append several tracks to the queue, in order (multi-select).
+    func addToQueue(_ tracks: [Track]) {
+        queue.append(contentsOf: tracks.map { QueueItem(track: $0) })
+    }
 
     func removeFromQueue(_ item: QueueItem) { queue.removeAll { $0.id == item.id } }
 
@@ -318,6 +349,11 @@ final class PlayerController: ObservableObject {
     func isFavorite(_ track: Track) -> Bool { favorites.isFavorite(track.url.path) }
 
     func toggleFavorite(_ track: Track) { favorites.toggle(track.url.path) }
+
+    /// Favorite or unfavorite a set of tracks at once (multi-select).
+    func setFavorite(_ tracks: [Track], to favorite: Bool) {
+        favorites.setFavorite(Set(tracks.map { $0.url.path }), to: favorite)
+    }
 
     // MARK: Playlists
 

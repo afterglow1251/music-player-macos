@@ -11,7 +11,8 @@ struct PlayerWindow: View {
     @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
     @State private var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
-    @State private var selectedTrackID: Track.ID?    // keyboard-navigation cursor in the track list
+    @State private var selectedTrackID: Track.ID?    // keyboard cursor + range anchor for ⇧-click
+    @State private var selection: Set<Track.ID> = [] // multi-selection for bulk actions (⌘/⇧-click)
     @State private var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
     private static let listBottomAnchorID = "nav-list-bottom"  // tail scroll anchor for the last row
     private static let listTopAnchorID = "nav-list-top"        // head scroll anchor for the first row
@@ -138,7 +139,7 @@ struct PlayerWindow: View {
         .background(
             backdrop
                 .contentShape(Rectangle())
-                .onTapGesture { dismissFocus() }
+                .onTapGesture { dismissFocus(); selection.removeAll() }
         )
         .overlay(alignment: .bottom) { bottomToasts }
         // Drag & drop audio files or a YouTube link onto the window.
@@ -156,6 +157,8 @@ struct PlayerWindow: View {
                 withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
                 searchText = ""
                 searchFieldFocused = false
+            } else if selection.count > 1 {
+                selection = selectedTrackID.map { [$0] } ?? []   // collapse a multi-selection first
             } else {
                 dismissFocus()
             }
@@ -181,6 +184,8 @@ struct PlayerWindow: View {
                     Button("") { moveSelection(by: -1) }.keyboardShortcut(.upArrow, modifiers: [])
                     Button("") { moveSelection(by: 1) }.keyboardShortcut(.downArrow, modifiers: [])
                     Button("") { playSelectedTrack() }.keyboardShortcut(.return, modifiers: [])
+                    Button("") { selectAll() }.keyboardShortcut("a", modifiers: .command)
+                    Button("") { deleteSelection() }.keyboardShortcut(.delete, modifiers: .command)
                 }
                 .hidden()
             }
@@ -266,6 +271,8 @@ struct PlayerWindow: View {
                     Button("") { moveSelection(by: -1) }.keyboardShortcut(.upArrow, modifiers: [])
                     Button("") { moveSelection(by: 1) }.keyboardShortcut(.downArrow, modifiers: [])
                     Button("") { playSelectedTrack() }.keyboardShortcut(.return, modifiers: [])
+                    Button("") { selectAll() }.keyboardShortcut("a", modifiers: .command)
+                    Button("") { deleteSelection() }.keyboardShortcut(.delete, modifiers: .command)
                 }
                 .hidden()
             }
@@ -622,6 +629,11 @@ struct PlayerWindow: View {
             Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 6).padding(.top, 6)
             list
         }
+        // Floating action bar for the current multi-selection, so bulk Favorite /
+        // Playlist / Queue / Delete are one visible tap away — not hidden behind a
+        // right-click. Slides up from the bottom of the card when 2+ rows are picked.
+        .overlay(alignment: .bottom) { selectionBar }
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: selection.count >= 2)
         // Transparent fill in fullscreen so it blends with the dark backdrop, but
         // always keep a border so the panel still has defined edges. Both live in
         // .background (not .overlay) so the border never paints over content that
@@ -739,6 +751,7 @@ struct PlayerWindow: View {
             index = delta > 0 ? 0 : tracks.count - 1
         }
         selectedTrackID = tracks[index].id
+        selection = [tracks[index].id]   // arrow keys collapse any multi-selection to the cursor
         scrollToSelectionNonce += 1   // only keyboard nav scrolls; playback-follow doesn't
     }
 
@@ -754,10 +767,165 @@ struct PlayerWindow: View {
     }
 
     /// A row click both plays the track and drops the cursor on it, so ↑/↓
-    /// continue from there.
+    /// continue from there. Also collapses any multi-selection to this one row.
     private func selectAndPlay(_ track: Track, in scope: [Track]?) {
         selectedTrackID = track.id
+        selection = [track.id]
         controller.play(track, in: scope)
+    }
+
+    /// Route a row click by modifier: ⌘ toggles the row in/out of the selection
+    /// (no playback), ⇧ selects the range from the anchor to the clicked row, and
+    /// a plain click plays it (collapsing the selection to just that row). Keeps the
+    /// Winamp-style click-to-play while layering standard macOS multi-select on top.
+    private func handleRowTap(_ track: Track, in scope: [Track]?) {
+        let mods = NSEvent.modifierFlags
+        if mods.contains(.command) {
+            if selection.contains(track.id) { selection.remove(track.id) }
+            else { selection.insert(track.id) }
+            selectedTrackID = track.id   // anchor follows the last ⌘-click
+        } else if mods.contains(.shift), let anchor = selectedTrackID {
+            let tracks = navigableTracks
+            if let a = tracks.firstIndex(where: { $0.id == anchor }),
+               let b = tracks.firstIndex(where: { $0.id == track.id }) {
+                let range = a <= b ? a...b : b...a
+                selection = Set(tracks[range].map { $0.id })   // anchor stays fixed for further ⇧-clicks
+            }
+        } else {
+            selectAndPlay(track, in: scope)
+        }
+    }
+
+    /// The selected tracks in on-screen order (empty when nothing is selected).
+    private var selectedTracks: [Track] {
+        navigableTracks.filter { selection.contains($0.id) }
+    }
+
+    /// Select every track in the current view (⌘A).
+    private func selectAll() {
+        let tracks = navigableTracks
+        guard !tracks.isEmpty else { return }
+        selection = Set(tracks.map { $0.id })
+    }
+
+    /// Delete the whole selection through the failure-aware bulk path, then clear.
+    private func deleteSelection() {
+        let tracks = selectedTracks
+        guard !tracks.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            controller.delete(tracks)
+            selection.removeAll()
+        }
+    }
+
+    /// The bulk context menu for a row, or nil unless the row is part of a
+    /// multi-selection (more than one row selected and this row among them).
+    /// `playlist` non-nil adds a "Remove from Playlist" bulk action.
+    private func bulkRowMenu(for track: Track, inPlaylist playlist: Playlist? = nil) -> BulkRowMenu? {
+        guard selection.contains(track.id), selection.count > 1 else { return nil }
+        let tracks = selectedTracks
+        let favs = tracks.map { controller.favorites.isFavorite($0.url.path) }
+        return BulkRowMenu(
+            count: tracks.count,
+            allFavorited: favs.allSatisfy { $0 },
+            anyFavorited: favs.contains(true),
+            onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(tracks) } },
+            onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(tracks) } },
+            onFavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.setFavorite(tracks, to: true) } },
+            onUnfavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.setFavorite(tracks, to: false) } },
+            addToPlaylists: bulkPlaylistMenuItems(for: tracks),
+            onNewPlaylistWithSelection: { createPlaylist(addingTracks: tracks, select: false) },
+            onRemoveFromPlaylist: playlist.map { pl in
+                { withAnimation(.easeInOut(duration: 0.2)) {
+                    for t in tracks { controller.playlists.remove(path: t.url.path, from: pl.id) }
+                    selection.removeAll()
+                } }
+            },
+            onDelete: { deleteSelection() }
+        )
+    }
+
+    /// "Add to Playlist" entries whose action adds ALL selected tracks at once.
+    private func bulkPlaylistMenuItems(for tracks: [Track]) -> [PlaylistMenuItem] {
+        controller.playlists.playlists.map { playlist in
+            PlaylistMenuItem(id: playlist.id, name: playlist.name, contains: false) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    for t in tracks { _ = controller.playlists.add(path: t.url.path, to: playlist.id) }
+                }
+            }
+        }
+    }
+
+    /// Floating bar of bulk actions, shown while 2+ rows are selected. Mirrors the
+    /// right-click bulk menu as visible, one-tap buttons pinned to the card's bottom.
+    @ViewBuilder private var selectionBar: some View {
+        if selection.count >= 2 {
+            let tracks = selectedTracks
+            let allFavorited = tracks.allSatisfy { controller.favorites.isFavorite($0.url.path) }
+            HStack(spacing: 4) {
+                Text("\(selection.count)")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(accent)
+                Text("selected")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+                Divider().frame(height: 15).overlay(Color.white.opacity(0.15)).padding(.horizontal, 4)
+
+                // Icon shows STATE (filled pink when the whole selection is already
+                // favorited), matching the row heart — the tooltip carries the action.
+                selectionButton(allFavorited ? "heart.fill" : "heart",
+                                help: allFavorited ? "Remove from Favorites" : "Add to Favorites",
+                                tint: allFavorited ? Theme.favorite : .white.opacity(0.85)) {
+                    withAnimation(.easeInOut(duration: 0.2)) { controller.setFavorite(tracks, to: !allFavorited) }
+                }
+                Menu {
+                    ForEach(bulkPlaylistMenuItems(for: tracks)) { item in
+                        Button(item.name, action: item.add)
+                    }
+                    if !controller.playlists.playlists.isEmpty { Divider() }
+                    Button("New Playlist…") { createPlaylist(addingTracks: tracks, select: false) }
+                } label: {
+                    Image(systemName: "text.badge.plus")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 26, height: 26).contentShape(Rectangle())
+                }
+                .menuStyle(.button).buttonStyle(PressableButtonStyle()).menuIndicator(.hidden).fixedSize()
+                .tooltip("Add to Playlist")
+                selectionButton("text.append", help: "Add to Queue") {
+                    withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(tracks) }
+                }
+                selectionButton("trash", help: "Delete", tint: .red.opacity(0.9)) { deleteSelection() }
+
+                Divider().frame(height: 15).overlay(Color.white.opacity(0.15)).padding(.horizontal, 4)
+                selectionButton("xmark", help: "Clear selection", size: 11) {
+                    withAnimation(.easeInOut(duration: 0.2)) { selection.removeAll() }
+                }
+            }
+            .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 5)
+            .background(
+                Capsule().fill(Color(white: 0.15))
+                    .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
+            )
+            .overlay(Capsule().stroke(.white.opacity(0.08)))
+            .padding(.bottom, 12)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    /// A compact icon button for the selection bar (smaller than the transport's).
+    private func selectionButton(_ symbol: String, help: String, size: CGFloat = 12.5,
+                                 tint: Color = .white.opacity(0.85),
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .tooltip(help)
     }
 
     /// A zero-size marker placed behind the currently-playing row: it emits whether
@@ -941,6 +1109,13 @@ struct PlayerWindow: View {
     private func createPlaylist(addingTrack track: Track? = nil, select: Bool = true) {
         let playlist = controller.playlists.create()
         if let track { _ = controller.playlists.add(path: track.url.path, to: playlist.id) }
+        if select { beginRename(id: playlist.id, current: playlist.name) }
+    }
+
+    /// Create a playlist seeded with several tracks (multi-select "New Playlist…").
+    private func createPlaylist(addingTracks tracks: [Track], select: Bool = true) {
+        let playlist = controller.playlists.create()
+        for track in tracks { _ = controller.playlists.add(path: track.url.path, to: playlist.id) }
         if select { beginRename(id: playlist.id, current: playlist.name) }
     }
 
@@ -1191,9 +1366,9 @@ struct PlayerWindow: View {
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
-            isSelected: selectedTrackID == track.id,
+            isSelected: selection.contains(track.id),
             durationText: timeString(track.duration),
-            onTap: { selectAndPlay(track, in: libraryPlaybackScope) },
+            onTap: { handleRowTap(track, in: libraryPlaybackScope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },
@@ -1209,7 +1384,8 @@ struct PlayerWindow: View {
             addToPlaylists: playlistMenuItems(for: track),
             onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) },
             isFavorite: controller.favorites.isFavorite(path),
-            onToggleFavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.toggleFavorite(track) } }
+            onToggleFavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.toggleFavorite(track) } },
+            bulk: bulkRowMenu(for: track)
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
                                       cursorY: dragCursorY, frames: rowFrames,
@@ -1226,9 +1402,9 @@ struct PlayerWindow: View {
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
-            isSelected: selectedTrackID == track.id,
+            isSelected: selection.contains(track.id),
             durationText: timeString(track.duration),
-            onTap: { selectAndPlay(track, in: scope) },
+            onTap: { handleRowTap(track, in: scope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
             onDelete: { controller.delete(track) },
@@ -1246,7 +1422,8 @@ struct PlayerWindow: View {
                 }
             },
             isFavorite: controller.favorites.isFavorite(path),
-            onToggleFavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.toggleFavorite(track) } }
+            onToggleFavorite: { withAnimation(.easeInOut(duration: 0.2)) { controller.toggleFavorite(track) } },
+            bulk: bulkRowMenu(for: track, inPlaylist: playlist)
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
                                       cursorY: dragCursorY, frames: rowFrames))
