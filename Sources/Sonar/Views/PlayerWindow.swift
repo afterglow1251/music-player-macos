@@ -28,6 +28,7 @@ struct PlayerWindow: View {
     @State private var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
     @State private var suppressTopResetOnce = false  // skip the next source-switch scroll restore (goToCurrentTrack centres instead)
     @State private var scrollMemory: [Playlist.ID?: CGFloat] = [:]  // per-source scroll offset, so each source reopens where you left it
+    @State private var scrollRestorer = ScrollOffsetRestorer()      // chases a remembered offset across the lazy content swap
     private static let listBottomAnchorID = "nav-list-bottom"  // tail scroll anchor for the last row
     private static let listTopAnchorID = "nav-list-top"        // head scroll anchor for the first row
     @State private var muteHovering = false           // mute button hover (driven by its AppKit catcher)
@@ -1184,6 +1185,14 @@ struct PlayerWindow: View {
         // view). Same-source clicks keep the pill — the preference value won't
         // change, so no report would come to restore it.
         if id != selectedPlaylistID { showNowPlayingPill = false; pillShowToken += 1 }
+        // Remember the outgoing source's offset HERE, before mutating the id:
+        // by the time onChange(of: selectedPlaylistID) fires, SwiftUI has already
+        // swapped the list content, and the offset may have been clamped against
+        // the incoming (possibly much shorter) list — saving there recorded ~0
+        // and every source reopened at the top.
+        if id != selectedPlaylistID, let sv = autoScroller.scrollView {
+            scrollMemory[selectedPlaylistID] = sv.contentView.bounds.origin.y
+        }
         selectedPlaylistID = id
         if id != nil { searchActive = false; searchText = "" }
     }
@@ -1452,21 +1461,12 @@ struct PlayerWindow: View {
                 // track — don't fight it by restoring a remembered offset.
                 if suppressTopResetOnce { suppressTopResetOnce = false; return }
                 // All sources share this one ScrollView, so without help the outgoing
-                // list's offset carries into the incoming one. Instead give each source
-                // its own memory: stash where we're leaving, restore where we're going
-                // (top for a never-visited source).
-                //
-                // Do it SYNCHRONOUSLY, straight on the clip view's bounds — not a
-                // deferred scroll(to:). SwiftUI keeps the clip offset across the content
-                // swap (that's the very leak we're fixing), so writing the target here
-                // lands in the same commit as the new content: no extra frame, no
-                // pixel-nudge jitter, no layout report that would blink the pill.
-                // Setting bounds.origin directly (vs scroll(to:), which clamps to the
-                // still-present old content) is safe because the remembered offset
-                // always belongs to the incoming source's own content.
+                // list's offset carries into the incoming one. Instead each source has
+                // its own memory: selectSource stashed the outgoing offset (it must —
+                // by the time this handler runs the content has already swapped and
+                // the live offset may be clamped to the new list); here we restore
+                // the incoming one (top for a never-visited source).
                 guard let sv = autoScroller.scrollView else { return }
-                let clip = sv.contentView
-                scrollMemory[oldID] = clip.bounds.origin.y
                 let target = scrollMemory[newID] ?? 0
                 // Invalidate any pending "jump to current track" from the outgoing
                 // source: a Now-playing tap fires a deferred proxy.scrollTo(currentID),
@@ -1474,11 +1474,16 @@ struct PlayerWindow: View {
                 // resolve against THIS new list and scroll it to a stray spot (and
                 // flash the pill).
                 jumpGeneration += 1
-                clip.bounds.origin = NSPoint(x: clip.bounds.origin.x, y: target)
-                sv.reflectScrolledClipView(clip)
+                // The restorer applies the offset now and keeps re-applying as the
+                // incoming LazyVStack grows its document over subsequent layout
+                // passes — a single write here gets clamped against whatever height
+                // the document happens to have mid-swap (deep library offsets always
+                // lost that race and snapped to the top).
+                scrollRestorer.restore(target, in: sv)
             }
             .onChange(of: scrollToCurrentNonce) { _, _ in
                 guard let id = controller.currentTrack?.id else { return }
+                scrollRestorer.cancel()   // a jump supersedes any in-flight restore
                 jumpGeneration += 1
                 let generation = jumpGeneration
                 let source = selectedPlaylistID
@@ -1497,6 +1502,7 @@ struct PlayerWindow: View {
             // Scroll only for keyboard navigation (nonce-driven), never when the
             // cursor merely follows a track change — that would yank the list.
             .onChange(of: scrollToSelectionNonce) { _, _ in
+                scrollRestorer.cancel()   // keyboard nav supersedes an in-flight restore
                 guard let id = selectedTrackID else { return }
                 let tracks = navigableTracks
                 if id == tracks.last?.id {
