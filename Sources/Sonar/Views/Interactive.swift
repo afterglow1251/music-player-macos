@@ -400,16 +400,32 @@ struct TrackRowView: View {
                         .opacity(hovering ? 1 : 0)
                         .allowsHitTesting(hovering)
                     }
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.red.opacity(0.9))
-                            .frame(width: 18, height: 20)
+                    // Inside a playlist the row's quick action removes the entry
+                    // from the list; the file itself can only be trashed from the
+                    // Library (or the context menu's explicit Delete).
+                    if let onRemoveFromPlaylist {
+                        Button(action: onRemoveFromPlaylist) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .frame(width: 18, height: 20)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .help("Remove from Playlist")
+                        .opacity(hovering ? 1 : 0)
+                        .allowsHitTesting(hovering)
+                    } else {
+                        Button(action: onDelete) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.red.opacity(0.9))
+                                .frame(width: 18, height: 20)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        .help("Delete (move to Trash)")
+                        .opacity(hovering ? 1 : 0)
+                        .allowsHitTesting(hovering)
                     }
-                    .buttonStyle(PressableButtonStyle())
-                    .help("Delete (move to Trash)")
-                    .opacity(hovering ? 1 : 0)
-                    .allowsHitTesting(hovering)
                     if reorderID != nil {
                         DragDots()
                             .foregroundStyle(.white.opacity(0.55))
