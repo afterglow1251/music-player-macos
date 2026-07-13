@@ -1313,6 +1313,11 @@ struct PlayerWindow: View {
             // already offers a jump when the current track is off-screen.
             .onChange(of: controller.currentTrack) { _, track in
                 selectedTrackID = track?.id
+                // The row outline is driven by `selection`, so collapse a single
+                // selection onto the new track to keep the border with playback.
+                // An active multi-selection (bulk action in progress) is left
+                // untouched so we don't wipe the user's in-progress pick.
+                if selection.count <= 1 { selection = track.map { [$0.id] } ?? [] }
             }
             .onChange(of: scrollToCurrentNonce) { _, _ in
                 guard let id = controller.currentTrack?.id else { return }
