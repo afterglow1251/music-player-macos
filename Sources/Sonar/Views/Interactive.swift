@@ -313,6 +313,10 @@ struct TrackRowView: View {
     /// Keyboard-navigation cursor: this row sits under the ↑/↓ selection. Drawn as
     /// an accent outline, distinct from the filled `isCurrent` (now-playing) row.
     var isSelected: Bool = false
+    /// Whether the selection was a deliberate pick (⌘/⇧-click, ⌘A, arrows) rather
+    /// than the side effect of click-to-play — deliberate picks outline even the
+    /// playing row, which otherwise suppresses the border.
+    var selectionIsExplicit: Bool = false
     let durationText: String
     let onTap: () -> Void
     let onPlayNext: () -> Void
@@ -447,11 +451,12 @@ struct TrackRowView: View {
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(background))
         .overlay(
-            // Only the keyboard cursor draws the outline, and never on the playing
-            // row (its accent fill already marks it) — so a plain click, which just
-            // starts the track, shows no border.
+            // A plain click-to-play shows no border on the playing row (its accent
+            // fill already marks it, and that click also set `isSelected`). But a
+            // deliberate selection — ⌘/⇧-click, ⌘A, arrow keys — outlines even the
+            // playing row, else picking it gives no feedback.
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(isSelected && !isCurrent ? accent.opacity(0.55) : .clear, lineWidth: 1.5)
+                .strokeBorder(isSelected && (!isCurrent || selectionIsExplicit) ? accent.opacity(0.55) : .clear, lineWidth: 1.5)
         )
         .scaleEffect(isDragging ? 1.02 : 1)
         .shadow(color: isDragging ? .black.opacity(0.45) : .clear,

@@ -13,6 +13,10 @@ struct PlayerWindow: View {
     @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
     @State private var selectedTrackID: Track.ID?    // keyboard cursor + range anchor for ⇧-click
     @State private var selection: Set<Track.ID> = [] // multi-selection for bulk actions (⌘/⇧-click)
+    /// True when `selection` was made deliberately (⌘/⇧-click, ⌘A, arrow keys) as
+    /// opposed to falling out of a click-to-play or playback-follow, which also set
+    /// it. An explicit selection outlines even the playing row.
+    @State private var selectionIsExplicit = false
     @State private var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
     private static let listBottomAnchorID = "nav-list-bottom"  // tail scroll anchor for the last row
     private static let listTopAnchorID = "nav-list-top"        // head scroll anchor for the first row
@@ -159,6 +163,7 @@ struct PlayerWindow: View {
                 searchFieldFocused = false
             } else if selection.count > 1 {
                 selection = selectedTrackID.map { [$0] } ?? []   // collapse a multi-selection first
+                selectionIsExplicit = false
             } else {
                 dismissFocus()
             }
@@ -752,6 +757,7 @@ struct PlayerWindow: View {
         }
         selectedTrackID = tracks[index].id
         selection = [tracks[index].id]   // arrow keys collapse any multi-selection to the cursor
+        selectionIsExplicit = true
         scrollToSelectionNonce += 1   // only keyboard nav scrolls; playback-follow doesn't
     }
 
@@ -771,6 +777,7 @@ struct PlayerWindow: View {
     private func selectAndPlay(_ track: Track, in scope: [Track]?) {
         selectedTrackID = track.id
         selection = [track.id]
+        selectionIsExplicit = false   // side effect of playing, not a deliberate pick
         controller.play(track, in: scope)
     }
 
@@ -781,8 +788,18 @@ struct PlayerWindow: View {
     private func handleRowTap(_ track: Track, in scope: [Track]?) {
         let mods = NSEvent.modifierFlags
         if mods.contains(.command) {
-            if selection.contains(track.id) { selection.remove(track.id) }
-            else { selection.insert(track.id) }
+            if !selectionIsExplicit {
+                // The current `selection` is just the playback-follow highlight, not
+                // a deliberate pick — the playing row already sits in it. Promote it
+                // to an explicit selection that includes this row rather than toggling
+                // the row back off, so ⌘-clicking the playing track outlines it.
+                selection.insert(track.id)
+                selectionIsExplicit = true
+            } else if selection.contains(track.id) {
+                selection.remove(track.id)
+            } else {
+                selection.insert(track.id)
+            }
             selectedTrackID = track.id   // anchor follows the last ⌘-click
         } else if mods.contains(.shift), let anchor = selectedTrackID {
             let tracks = navigableTracks
@@ -790,6 +807,7 @@ struct PlayerWindow: View {
                let b = tracks.firstIndex(where: { $0.id == track.id }) {
                 let range = a <= b ? a...b : b...a
                 selection = Set(tracks[range].map { $0.id })   // anchor stays fixed for further ⇧-clicks
+                selectionIsExplicit = true
             }
         } else {
             selectAndPlay(track, in: scope)
@@ -806,6 +824,7 @@ struct PlayerWindow: View {
         let tracks = navigableTracks
         guard !tracks.isEmpty else { return }
         selection = Set(tracks.map { $0.id })
+        selectionIsExplicit = true
     }
 
     /// Delete the whole selection through the failure-aware bulk path, then clear.
@@ -878,6 +897,10 @@ struct PlayerWindow: View {
                                 tint: allFavorited ? Theme.favorite : .white.opacity(0.85)) {
                     withAnimation(.easeInOut(duration: 0.2)) { controller.setFavorite(tracks, to: !allFavorited) }
                 }
+                selectionButton("text.append", help: "Add to Queue") {
+                    withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(tracks) }
+                }
+                // Queue first, then the playlist pair (add / remove) side by side.
                 Menu {
                     ForEach(bulkPlaylistMenuItems(for: tracks)) { item in
                         Button(item.name, action: item.add)
@@ -892,9 +915,6 @@ struct PlayerWindow: View {
                 }
                 .menuStyle(.button).buttonStyle(PressableButtonStyle()).menuIndicator(.hidden).fixedSize()
                 .tooltip("Add to Playlist")
-                selectionButton("text.append", help: "Add to Queue") {
-                    withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(tracks) }
-                }
                 // text.badge.minus pairs with the Add to Playlist badge above;
                 // xmark is taken by Clear selection.
                 if let playlist = selectedPlaylist {
@@ -1327,7 +1347,10 @@ struct PlayerWindow: View {
                 // selection onto the new track to keep the border with playback.
                 // An active multi-selection (bulk action in progress) is left
                 // untouched so we don't wipe the user's in-progress pick.
-                if selection.count <= 1 { selection = track.map { [$0.id] } ?? [] }
+                if selection.count <= 1 {
+                    selection = track.map { [$0.id] } ?? []
+                    selectionIsExplicit = false   // playback-follow, not a user pick
+                }
             }
             .onChange(of: scrollToCurrentNonce) { _, _ in
                 guard let id = controller.currentTrack?.id else { return }
@@ -1382,6 +1405,7 @@ struct PlayerWindow: View {
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
             isSelected: selection.contains(track.id),
+            selectionIsExplicit: selectionIsExplicit,
             durationText: timeString(track.duration),
             onTap: { handleRowTap(track, in: libraryPlaybackScope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
@@ -1418,6 +1442,7 @@ struct PlayerWindow: View {
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
             isSelected: selection.contains(track.id),
+            selectionIsExplicit: selectionIsExplicit,
             durationText: timeString(track.duration),
             onTap: { handleRowTap(track, in: scope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
