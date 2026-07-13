@@ -92,6 +92,36 @@ struct PlayerWindow: View {
         // Enable the native green fullscreen button / ⌃⌘F, and track its state so
         // we can swap in the immersive visualizer when the window goes fullscreen.
         .background(FullscreenEnabler())
+        // Esc handling for BOTH modes, via a local NSEvent monitor that fires
+        // before the window: we swallow the key (return true) whenever there's an
+        // open layer to peel back — a section (settings/lyrics), the search, or a
+        // multi-selection. This is a monitor rather than `.onExitCommand` because
+        // (a) in fullscreen macOS leaves fullscreen on Esc by itself and only
+        // consuming the event stops that, and (b) a focused list row can swallow
+        // Esc before `.onExitCommand` ever sees it. Returning false lets Esc through
+        // to its default job — leave fullscreen, or just drop the cursor.
+        .background(EscapeInterceptor {
+            if showSettings || showLyrics {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    showSettings = false
+                    showLyrics = false
+                }
+                return true
+            } else if searchActive {
+                withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
+                searchText = ""
+                searchFieldFocused = false
+                return true
+            } else if selection.count > 1 {
+                selection.removeAll()          // clear the whole multi-selection
+                selectionIsExplicit = false
+                return true
+            } else if urlFieldFocused || searchFieldFocused {
+                dismissFocus()
+                return true
+            }
+            return false
+        })
         // Decode artwork here (not in normalContent) so the cover updates in
         // fullscreen too, where normalContent isn't in the tree.
         .onAppear { decodeArtwork(controller.currentTrack) }
@@ -173,9 +203,15 @@ struct PlayerWindow: View {
                 RoundedRectangle(cornerRadius: 8).stroke(accent, lineWidth: 2).padding(4)
             }
         }
-        // Escape: close the search if it's open, otherwise just drop the cursor.
+        // Escape: peel back one layer — an open section (settings/lyrics), then the
+        // search, then a multi-selection — otherwise just drop the cursor.
         .onExitCommand {
-            if searchActive {
+            if showSettings || showLyrics {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    showSettings = false
+                    showLyrics = false
+                }
+            } else if searchActive {
                 withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
                 searchText = ""
                 searchFieldFocused = false
@@ -264,20 +300,6 @@ struct PlayerWindow: View {
         // trigger the window's drop highlight.
         .onDrop(of: [.fileURL, .url], isTargeted: $isDropTargeted) { handleDrop($0) }
         .overlay(alignment: .bottom) { bottomToasts }
-        // Esc: if a field/search is active, just dismiss it — only leave fullscreen
-        // when nothing is focused (otherwise pressing Esc to clear a field would
-        // unexpectedly collapse the window).
-        .onExitCommand {
-            if searchActive {
-                withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
-                searchText = ""
-                searchFieldFocused = false
-            } else if urlFieldFocused || searchFieldFocused {
-                dismissFocus()
-            } else {
-                NSApp.keyWindow?.toggleFullScreen(nil)
-            }
-        }
         // ⌘, toggles the inline settings panel here too.
         .onReceive(NotificationCenter.default.publisher(for: .toggleSettings)) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { showSettings.toggle() }
