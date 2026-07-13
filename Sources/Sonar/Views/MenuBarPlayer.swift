@@ -488,9 +488,9 @@ private struct MiniPlayerView: View {
 
     private var transport: some View {
         HStack(spacing: 24) {
-            control("backward.fill") { controller.previous() }
+            control("backward.end.fill") { controller.previous() }
             control(engine.isPlaying ? "pause.fill" : "play.fill", size: 20) { controller.togglePlayPause() }
-            control("forward.fill") { controller.next() }
+            control("forward.end.fill") { controller.next() }
         }
     }
 

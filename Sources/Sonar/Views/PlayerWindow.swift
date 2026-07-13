@@ -455,12 +455,12 @@ struct PlayerWindow: View {
             toggleIcon("shuffle", active: controller.shuffle, size: 15, help: "Shuffle") {
                 controller.shuffle.toggle()
             }
-            iconButton("backward.end", size: 15, help: "Previous  ⌘◀") { controller.previous() }
+            iconButton("backward.end.fill", size: 15, help: "Previous  ⌘◀") { controller.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
             iconButton("gobackward.10", size: 15, help: "Back 10 seconds  ◀") { controller.seekBy(-10) }
             playButton
             iconButton("goforward.10", size: 15, help: "Forward 10 seconds  ▶") { controller.seekBy(10) }
-            iconButton("forward.end", size: 15, help: "Next  ⌘▶") { controller.next() }
+            iconButton("forward.end.fill", size: 15, help: "Next  ⌘▶") { controller.next() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
             toggleIcon(controller.repeatMode == .one ? "repeat.1" : "repeat",
                        active: controller.repeatMode != .off, size: 15, help: "Repeat") {
