@@ -1098,6 +1098,12 @@ struct PlayerWindow: View {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
             }
+            // Same "jump to the playing track" offer as the library header — shown
+            // only while the current track is scrolled out of this playlist's view.
+            if controller.currentTrack != nil, showNowPlayingPill {
+                nowPlayingPill
+                    .transition(.opacity)
+            }
             Spacer()
             if !playlistTracks.isEmpty {
                 Button { controller.playPlaylist(playlist) } label: {
@@ -1126,6 +1132,7 @@ struct PlayerWindow: View {
         .frame(height: 24)
         .padding(.horizontal, 10)
         .padding(.top, 8).padding(.bottom, 4)
+        .animation(.easeInOut(duration: 0.2), value: showNowPlayingPill)
     }
 
     // MARK: Source actions
