@@ -10,12 +10,16 @@ struct MarqueeText: View {
     let text: String
     var fontSize: CGFloat = 15
     var bold: Bool = true
+    /// Overrides `bold` when set — lets callers ask for intermediate weights
+    /// (e.g. the menu-bar panel's `.semibold` title) instead of only bold/regular.
+    var weight: Font.Weight? = nil
     var color: Color = .white
     var speed: Double = 35            // points per second
     private let spacing: CGFloat = 44 // gap between the repeated copies
 
-    private var nsFont: NSFont { .systemFont(ofSize: fontSize, weight: bold ? .bold : .regular) }
-    private var uiFont: Font { .system(size: fontSize, weight: bold ? .bold : .regular) }
+    private var resolvedWeight: Font.Weight { weight ?? (bold ? .bold : .regular) }
+    private var nsFont: NSFont { .systemFont(ofSize: fontSize, weight: resolvedWeight.nsWeight) }
+    private var uiFont: Font { .system(size: fontSize, weight: resolvedWeight) }
 
     private var textWidth: CGFloat {
         (text as NSString).size(withAttributes: [.font: nsFont]).width
@@ -57,5 +61,24 @@ struct MarqueeText: View {
             .init(color: .black, location: 0.94),
             .init(color: .clear, location: 1),
         ], startPoint: .leading, endPoint: .trailing)
+    }
+}
+
+private extension Font.Weight {
+    /// The matching AppKit weight, so the mathematical width measurement uses the
+    /// same font as the rendered SwiftUI `Text`.
+    var nsWeight: NSFont.Weight {
+        switch self {
+        case .ultraLight: return .ultraLight
+        case .thin: return .thin
+        case .light: return .light
+        case .regular: return .regular
+        case .medium: return .medium
+        case .semibold: return .semibold
+        case .bold: return .bold
+        case .heavy: return .heavy
+        case .black: return .black
+        default: return .regular
+        }
     }
 }

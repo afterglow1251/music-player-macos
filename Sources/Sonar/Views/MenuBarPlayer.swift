@@ -396,10 +396,12 @@ private struct MiniPlayerView: View {
             artwork
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 0) {
-                    Text(controller.currentTrack?.displayTitle ?? "Nothing playing")
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
+                    // Scrolls when the title overflows, matching the main window's
+                    // now-playing title. `.frame(maxWidth: .infinity)` gives the
+                    // marquee all the room left after the fixed "show main" button.
+                    MarqueeText(text: controller.currentTrack?.displayTitle ?? "Nothing playing",
+                                fontSize: 12, weight: .semibold, color: .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     // Hidden (not just disabled) while the main window is already
                     // frontmost — clicking it then would have nothing to do.
                     if !windowVisibility.isFrontmost {
@@ -414,10 +416,8 @@ private struct MiniPlayerView: View {
                     }
                 }
                 if let artist = controller.currentTrack?.artist, !artist.isEmpty {
-                    Text(artist)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    MarqueeText(text: artist, fontSize: 11, weight: .regular, color: .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
