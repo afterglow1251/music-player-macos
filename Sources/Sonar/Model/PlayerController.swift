@@ -34,11 +34,15 @@ final class PlayerController: ObservableObject {
     let favorites = FavoritesStore()
     let downloader = Downloader()
     let lyrics = LyricsController()
+    let waveforms = WaveformStore()
     private let nowPlaying = NowPlayingController()
 
     @Published private(set) var currentTrack: Track? {
         didSet {
-            if currentTrack?.url != oldValue?.url { lyrics.load(for: currentTrack) }
+            if currentTrack?.url != oldValue?.url {
+                lyrics.load(for: currentTrack)
+                waveforms.load(for: currentTrack)
+            }
             if currentTrack?.artworkData != oldValue?.artworkData { refreshAlbumTheme() }
         }
     }
