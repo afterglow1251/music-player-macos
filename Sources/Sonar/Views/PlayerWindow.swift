@@ -455,12 +455,12 @@ struct PlayerWindow: View {
             toggleIcon("shuffle", active: controller.shuffle, size: 15, help: "Shuffle") {
                 controller.shuffle.toggle()
             }
-            iconButton("backward.end.fill", size: 15, help: "Previous  ⌘◀") { controller.previous() }
+            iconButton("backward.end.fill", size: 15, help: "Previous", hotkey: "⌘◀") { controller.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
-            iconButton("gobackward.10", size: 15, help: "Back 10 seconds  ◀") { controller.seekBy(-10) }
+            iconButton("gobackward.10", size: 15, help: "Back 10 seconds", hotkey: "◀") { controller.seekBy(-10) }
             playButton
-            iconButton("goforward.10", size: 15, help: "Forward 10 seconds  ▶") { controller.seekBy(10) }
-            iconButton("forward.end.fill", size: 15, help: "Next  ⌘▶") { controller.next() }
+            iconButton("goforward.10", size: 15, help: "Forward 10 seconds", hotkey: "▶") { controller.seekBy(10) }
+            iconButton("forward.end.fill", size: 15, help: "Next", hotkey: "⌘▶") { controller.next() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
             toggleIcon(controller.repeatMode == .one ? "repeat.1" : "repeat",
                        active: controller.repeatMode != .off, size: 15, help: "Repeat") {
@@ -480,13 +480,13 @@ struct PlayerWindow: View {
                 .shadow(color: accent.opacity(0.5), radius: 8)
         }
         .buttonStyle(PressableButtonStyle(hoverScale: 1.06))
-        .tooltip(engine.isPlaying ? "Pause" : "Play")
+        .tooltip(engine.isPlaying ? "Pause" : "Play", hotkey: "Space")
         .keyboardShortcut(.space, modifiers: [])
     }
 
     /// Plain transport icon — no background circle (Spotify-style).
     private func iconButton(_ symbol: String, size: CGFloat, weight: Font.Weight = .medium,
-                            help: String, action: @escaping () -> Void) -> some View {
+                            help: String, hotkey: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: weight))
@@ -495,7 +495,7 @@ struct PlayerWindow: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .tooltip(help)
+        .tooltip(help, hotkey: hotkey)
     }
 
     /// Toggle icon (shuffle/repeat) — green when active, gray when off.
