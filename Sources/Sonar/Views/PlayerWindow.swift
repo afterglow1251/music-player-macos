@@ -826,19 +826,27 @@ struct PlayerWindow: View {
             selectedTrackID = track.id   // the ⌘-click becomes the latest pick
             lastClickedID = track.id
         } else if mods.contains(.shift) {
-            // Range between the two most recent picks: the last deliberately
-            // clicked row and this one. With no prior click (fresh view — the
-            // playing row doesn't count) this just selects the clicked row and
+            // ⇧-click extends a range only when there's a *live, deliberate*
+            // selection to anchor to — i.e. the anchor row is still explicitly
+            // selected right now. This is checked against live state, not a
+            // sticky flag, so the moment the selection is empty (fresh view,
+            // everything cleared, background-tapped away) or is merely the
+            // playback-follow highlight (a played track isn't a deliberate
+            // pick), this ⇧-click is a plain pick: it selects just this row and
             // seeds the anchor, so the *next* ⇧-click ranges out from here.
             let tracks = navigableTracks
-            let anchorID = lastClickedID ?? track.id
-            if let a = tracks.firstIndex(where: { $0.id == anchorID }),
+            if selectionIsExplicit,
+               let anchor = lastClickedID,
+               selection.contains(anchor),
+               let a = tracks.firstIndex(where: { $0.id == anchor }),
                let b = tracks.firstIndex(where: { $0.id == track.id }) {
                 let range = a <= b ? a...b : b...a
                 selection = Set(tracks[range].map { $0.id })
+            } else {
+                selection = [track.id]
                 selectionIsExplicit = true
             }
-            lastClickedID = track.id      // this click is now the newest of the "last two"
+            lastClickedID = track.id      // this click is now the newest anchor
             selectedTrackID = track.id
         } else {
             selectAndPlay(track, in: scope)
