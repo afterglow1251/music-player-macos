@@ -30,6 +30,13 @@ struct PlayerWindow: View {
     @State private var rowFrames: [String: CGRect] = [:]
     @State private var draggingID: String?
     @State private var dragCursorY: CGFloat = 0
+    /// The dragged row's slot frame, snapshotted at drag start — sizes/places the
+    /// floating ghost and anchors the shift math even after the lazy stack culls
+    /// the row itself.
+    @State private var draggedFrame: CGRect?
+    /// Scrolls the list when a reorder drag nears the viewport edge, so long
+    /// lists can be reordered past the visible rows.
+    @State private var autoScroller = ReorderAutoScroller()
     // Collapsed artist sections (Artist view).
     @State private var collapsedGroups: Set<String> = []
     // Source switcher: nil = the whole library, otherwise the viewed playlist.
@@ -1244,11 +1251,17 @@ struct PlayerWindow: View {
                                 },
                                 reorderID: qid,
                                 isDragging: draggingID == qid,
-                                onReorderChanged: { y in handleQueueReorder(id: qid, cursorY: y) },
-                                onReorderEnded: { withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil } }
+                                dragActive: draggingID != nil,
+                                onReorderChanged: { y in
+                                    guard !autoScroller.sessionActive else { return }
+                                    handleReorderDrag(id: qid, cursorY: y) { finishQueueReorder(id: qid) }
+                                },
+                                onReorderEnded: { finishQueueReorder(id: qid) }
                             )
                             .modifier(ReorderDragModifier(id: qid, draggingID: draggingID,
-                                                          cursorY: dragCursorY, frames: rowFrames))
+                                                          cursorY: dragCursorY, draggedFrame: draggedFrame,
+                                                          frames: rowFrames,
+                                                          sectionActive: dragIsQueueItem))
                         }
                         Divider().overlay(Color.white.opacity(0.08))
                             .padding(.horizontal, 4).padding(.top, 6).padding(.bottom, 2)
@@ -1313,9 +1326,15 @@ struct PlayerWindow: View {
                                            value: CurrentRowReport(source: selectedPlaylistID, visible: false))
                 }
                 .coordinateSpace(.named("reorder"))
+                // The floating copy of the dragged row. Drawn as an overlay of
+                // the scroll *content* (same origin as the "reorder" space), so
+                // positioning it is pure content-space math — and unlike the
+                // real row it isn't a lazy-stack item, so it can't be culled.
+                .overlay(alignment: .topLeading) { dragGhost }
                 .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
                 // Inside the ScrollView on purpose — see OverlayScrollerStyle.
                 .background(OverlayScrollerStyle())
+                .background(AutoScrollerCapture(scroller: autoScroller))
             }
             .coordinateSpace(.named("libScroll"))
             .frame(height: fixedHeight)
@@ -1396,6 +1415,61 @@ struct PlayerWindow: View {
         }
     }
 
+    /// The floating replica of the dragged row that follows the cursor. The real
+    /// row hides while dragging: as a lazy-stack item it stops rendering once its
+    /// slot scrolls off-screen no matter how far it's offset, so on long
+    /// auto-scrolls the dragged track went invisible.
+    @ViewBuilder private var dragGhost: some View {
+        if let id = draggingID, let frame = draggedFrame {
+            // The cursor may wander outside the list, but the ghost stays inside:
+            // clamped to the content (first row top … last row bottom, `geo` is
+            // the full scrollable content) and to the visible viewport (the clip
+            // view's bounds), so it parks at the edge instead of escaping the
+            // container. Purely visual — the drop index still follows the cursor.
+            GeometryReader { geo in
+                let clip = autoScroller.scrollView?.contentView.bounds
+                let minY = max(6, clip?.minY ?? -.infinity)
+                let maxY = min(geo.size.height - 6, clip?.maxY ?? .infinity) - frame.height
+                ghostRow(for: id)
+                    .frame(width: frame.width, height: frame.height)
+                    .offset(x: frame.minX,
+                            y: min(max(dragCursorY - frame.height / 2, minY), max(minY, maxY)))
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// A non-interactive copy of the dragged row, styled as lifted.
+    @ViewBuilder private func ghostRow(for id: String) -> some View {
+        if let uid = UUID(uuidString: id) {
+            if let index = controller.queue.firstIndex(where: { $0.id == uid }) {
+                QueueRowView(track: controller.queue[index].track,
+                             position: index + 1,
+                             onRemove: {},
+                             reorderID: id,
+                             isDragging: true)
+            }
+        } else {
+            let tracks = selectedPlaylist != nil ? playlistTracks : filteredTracks
+            if let track = tracks.first(where: { $0.url.path == id }) {
+                TrackRowView(track: track,
+                             isCurrent: controller.currentTrack == track,
+                             isPlaying: engine.isPlaying,
+                             isSelected: false,
+                             selectionIsExplicit: false,
+                             durationText: timeString(track.duration),
+                             onTap: {},
+                             onPlayNext: {},
+                             onAddToQueue: {},
+                             onDelete: {},
+                             reorderID: id,
+                             isDragging: true,
+                             isFavorite: controller.favorites.isFavorite(id),
+                             onToggleFavorite: nil)
+            }
+        }
+    }
+
     /// One library row. `reorderID` non-nil enables drag (Manual view only).
     /// `showArtist` is off inside a named artist section (the header already names it).
     private func libraryRow(_ track: Track, showArtist: Bool = true, reorderID: String? = nil) -> some View {
@@ -1415,11 +1489,12 @@ struct PlayerWindow: View {
             queueHasItems: !controller.queue.isEmpty,
             reorderID: reorderID,
             isDragging: draggingID == path,
-            onReorderChanged: { y in handleLibraryReorder(path: path, cursorY: y) },
-            onReorderEnded: {
-                controller.library.commitOrder()
-                withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
+            dragActive: draggingID != nil,
+            onReorderChanged: { y in
+                guard !autoScroller.sessionActive else { return }
+                handleReorderDrag(id: path, cursorY: y) { finishLibraryReorder(path: path) }
             },
+            onReorderEnded: { finishLibraryReorder(path: path) },
             addToPlaylists: playlistMenuItems(for: track),
             onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) },
             isFavorite: controller.favorites.isFavorite(path),
@@ -1427,8 +1502,10 @@ struct PlayerWindow: View {
             bulk: bulkRowMenu(for: track)
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
-                                      cursorY: dragCursorY, frames: rowFrames,
-                                      enabled: reorderID != nil))
+                                      cursorY: dragCursorY, draggedFrame: draggedFrame,
+                                      frames: rowFrames,
+                                      enabled: reorderID != nil,
+                                      sectionActive: !dragIsQueueItem))
         .background { currentRowMarker(for: track) }
     }
 
@@ -1451,11 +1528,12 @@ struct PlayerWindow: View {
             queueHasItems: !controller.queue.isEmpty,
             reorderID: path,
             isDragging: draggingID == path,
-            onReorderChanged: { y in handlePlaylistReorder(path: path, in: playlist, cursorY: y) },
-            onReorderEnded: {
-                controller.playlists.commit(playlist.id)
-                withAnimation(.easeInOut(duration: 0.18)) { draggingID = nil }
+            dragActive: draggingID != nil,
+            onReorderChanged: { y in
+                guard !autoScroller.sessionActive else { return }
+                handleReorderDrag(id: path, cursorY: y) { finishPlaylistReorder(path: path, in: playlist) }
             },
+            onReorderEnded: { finishPlaylistReorder(path: path, in: playlist) },
             onRemoveFromPlaylist: {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     controller.playlists.remove(path: path, from: playlist.id)
@@ -1466,7 +1544,9 @@ struct PlayerWindow: View {
             bulk: bulkRowMenu(for: track, inPlaylist: playlist)
         )
         .modifier(ReorderDragModifier(id: path, draggingID: draggingID,
-                                      cursorY: dragCursorY, frames: rowFrames))
+                                      cursorY: dragCursorY, draggedFrame: draggedFrame,
+                                      frames: rowFrames,
+                                      sectionActive: !dragIsQueueItem))
         .background { currentRowMarker(for: track) }
     }
 
@@ -1593,45 +1673,115 @@ struct PlayerWindow: View {
         .zIndex(1)
     }
 
-    /// Reorder the library live from the cursor's y position — pure math, so the
-    /// insertion never lags behind the finger. (Manual view only.)
-    private func handleLibraryReorder(path: String, cursorY: CGFloat) {
-        if draggingID != path { draggingID = path }
-        dragCursorY = cursorY
-        // Frames are only reported once a drag is active, so the first tick may
-        // arrive before any are known — wait for them rather than snapping to 0.
-        guard !rowFrames.isEmpty else { return }
-        let others = filteredTracks.filter { $0.url.path != path }
-        let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
-        if controller.library.tracks.firstIndex(where: { $0.url.path == path }) != target {
-            withAnimation(.easeInOut(duration: 0.18)) { controller.library.reorder(path: path, toIndex: target) }
-        }
+    // MARK: Drag reorder
+    // The machinery (ghost/shift modifier, auto-scroll, event-monitor session,
+    // frame preference) lives in ReorderDrag.swift — its file header explains
+    // the architecture. Here is only the wiring into this window's lists:
+    // live-drag state updates and the one model commit per drop.
+
+    /// Whether the active drag is a queue item (queue rows key on UUID strings,
+    /// list rows on file paths).
+    private var dragIsQueueItem: Bool {
+        draggingID.flatMap { UUID(uuidString: $0) } != nil
     }
 
-    /// Reorder within a playlist live from the cursor's y position.
-    private func handlePlaylistReorder(path: String, in playlist: Playlist, cursorY: CGFloat) {
-        if draggingID != path { draggingID = path }
-        dragCursorY = cursorY
-        guard !rowFrames.isEmpty else { return }
-        let others = playlistTracks.filter { $0.url.path != path }
-        let target = others.filter { (rowFrames[$0.url.path]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
-        if selectedPlaylist?.trackPaths.firstIndex(of: path) != target {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                controller.playlists.reorder(path: path, toIndex: target, in: playlist.id)
-            }
-        }
-    }
-
-    /// Reorder the queue live from the cursor's y position.
-    private func handleQueueReorder(id: String, cursorY: CGFloat) {
+    /// Live drag tick, shared by all three lists. No model mutation happens
+    /// here — the rows part around the cursor purely visually (see
+    /// ReorderDragModifier) and the single model move lands on drop. Reordering
+    /// the model live fed the shifting row frames straight back into the
+    /// insertion math, which twitched the rows.
+    private func handleReorderDrag(id: String, cursorY: CGFloat, onEnd: @escaping () -> Void) {
         if draggingID != id { draggingID = id }
         dragCursorY = cursorY
-        guard !rowFrames.isEmpty else { return }
-        guard let uid = UUID(uuidString: id) else { return }
-        let others = controller.queue.filter { $0.id.uuidString != id }
-        let target = others.filter { (rowFrames[$0.id.uuidString]?.midY ?? .greatestFiniteMagnitude) < cursorY }.count
-        if controller.queue.firstIndex(where: { $0.id == uid }) != target {
-            withAnimation(.easeInOut(duration: 0.18)) { controller.reorderQueue(id: uid, toIndex: target) }
+        // Snapshot the slot frame once per drag (frames arrive a pass after
+        // draggingID is set, hence the retry rather than a one-shot at start).
+        if draggedFrame == nil, let frame = rowFrames[id] {
+            draggedFrame = frame
+            dragLog("start \(id) slot=\(frame)")
+        }
+        // The row's own gesture dies silently if the lazy stack culls the row
+        // mid-drag, so a window event monitor takes over from the first tick —
+        // including the mouse-up, which must fire the drop even then.
+        autoScroller.beginSession(
+            onDrag: { handleReorderDrag(id: id, cursorY: $0, onEnd: onEnd) },
+            onUp: onEnd)
+        autoScroller.onScroll = { handleReorderDrag(id: id, cursorY: $0, onEnd: onEnd) }
+        autoScroller.update(cursorY: cursorY)
+    }
+
+    /// Insertion index for a drop: anchor on the row nearest the cursor that
+    /// still has a known frame and derive the index from the data order. (The
+    /// old "count every row above the cursor" undercounted on long drags — the
+    /// lazy stack culls far-away rows, whose frames then stop reporting. The
+    /// nearest row is on-screen by definition, so its frame is always known.)
+    private func dropIndex(keys: [String]) -> Int? {
+        var best: (index: Int, midY: CGFloat, distance: CGFloat)?
+        for (index, key) in keys.enumerated() {
+            guard let midY = rowFrames[key]?.midY else { continue }
+            let distance = abs(midY - dragCursorY)
+            if best == nil || distance < best!.distance { best = (index, midY, distance) }
+        }
+        guard let best else { return nil }
+        return dragCursorY > best.midY ? best.index + 1 : best.index
+    }
+
+    /// Diagnostics for the drag machinery (Debug builds only) — enable with
+    /// `defaults write com.sonar.player SonarDragDebug -bool YES`.
+    private func dragLog(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "SonarDragDebug") {
+            print("[drag] \(message())")
+        }
+        #endif
+    }
+
+    /// Drop: move the dragged track to the slot the cursor is over and persist.
+    /// (Manual view only.)
+    private func finishLibraryReorder(path: String) {
+        // The event monitor's mouse-up and the gesture's onEnded can both land
+        // here; the first one clears draggingID and the second is a no-op.
+        guard draggingID == path else { return }
+        autoScroller.stop()
+        withAnimation(.easeInOut(duration: 0.18)) {
+            if draggingID == path,
+               let target = dropIndex(keys: filteredTracks.filter { $0.url.path != path }.map(\.url.path)) {
+                dragLog("library drop \(path) → \(target) (\(rowFrames.count) frames known)")
+                controller.library.reorder(path: path, toIndex: target)
+            }
+            draggingID = nil
+            draggedFrame = nil
+        }
+        controller.library.commitOrder()
+    }
+
+    /// Drop within a playlist — same math against the playlist's rows.
+    private func finishPlaylistReorder(path: String, in playlist: Playlist) {
+        guard draggingID == path else { return }
+        autoScroller.stop()
+        withAnimation(.easeInOut(duration: 0.18)) {
+            if draggingID == path,
+               let target = dropIndex(keys: playlistTracks.filter { $0.url.path != path }.map(\.url.path)) {
+                dragLog("playlist drop \(path) → \(target) (\(rowFrames.count) frames known)")
+                controller.playlists.reorder(path: path, toIndex: target, in: playlist.id)
+            }
+            draggingID = nil
+            draggedFrame = nil
+        }
+        controller.playlists.commit(playlist.id)
+    }
+
+    /// Drop within the queue.
+    private func finishQueueReorder(id: String) {
+        guard draggingID == id else { return }
+        autoScroller.stop()
+        withAnimation(.easeInOut(duration: 0.18)) {
+            if draggingID == id, let uid = UUID(uuidString: id),
+               let target = dropIndex(keys: controller.queue.filter { $0.id.uuidString != id }.map(\.id.uuidString)) {
+                dragLog("queue drop \(id) → \(target)")
+                controller.reorderQueue(id: uid, toIndex: target)
+            }
+            draggingID = nil
+            draggedFrame = nil
         }
     }
 

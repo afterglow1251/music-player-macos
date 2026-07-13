@@ -292,18 +292,6 @@ struct Shake: GeometryEffect {
     }
 }
 
-/// A 6-dot drag handle (2 columns × 3 rows), the affordance for reordering.
-struct DragDots: View {
-    var body: some View {
-        Grid(horizontalSpacing: 3, verticalSpacing: 2.5) {
-            ForEach(0..<3, id: \.self) { _ in
-                GridRow { dot; dot }
-            }
-        }
-    }
-    private var dot: some View { Circle().frame(width: 2.5, height: 2.5) }
-}
-
 /// One row in the library list. Highlights on hover and when it's the current
 /// track, so the playlist feels interactive.
 struct TrackRowView: View {
@@ -335,6 +323,11 @@ struct TrackRowView: View {
     /// "reorder" coordinate space) so the parent can reorder by pure math.
     var reorderID: String? = nil
     var isDragging: Bool = false
+    /// True while any row in the list is being drag-reordered. Suppresses hover
+    /// feedback on the other rows: during drag auto-scroll the list slides under
+    /// a stationary cursor, and without this every passing row flashes its
+    /// highlight and controls.
+    var dragActive: Bool = false
     var onReorderChanged: (CGFloat) -> Void = { _ in }
     var onReorderEnded: () -> Void = {}
     /// "Add to Playlist ▸" submenu contents. Empty = the submenu is hidden.
@@ -354,6 +347,10 @@ struct TrackRowView: View {
     private let accent = Theme.accent
 
     @State private var hovering = false
+
+    /// Hover feedback, gated off while another row is being dragged (the dragged
+    /// row itself keeps it so the handle stays visible under the cursor).
+    private var hover: Bool { hovering && (!dragActive || isDragging) }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -389,7 +386,7 @@ struct TrackRowView: View {
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(.white.opacity(0.4))
                     .lineLimit(1)
-                    .opacity(hovering ? 0 : 1)
+                    .opacity(hover ? 0 : 1)
                 HStack(spacing: 6) {
                     if let onToggleFavorite {
                         Button(action: onToggleFavorite) {
@@ -401,8 +398,8 @@ struct TrackRowView: View {
                         .buttonStyle(PressableButtonStyle())
                         .help(isFavorite ? "Remove from Favorites" : "Add to Favorites")
                         // Hover-only: at rest the pink note is the favorite marker.
-                        .opacity(hovering ? 1 : 0)
-                        .allowsHitTesting(hovering)
+                        .opacity(hover ? 1 : 0)
+                        .allowsHitTesting(hover)
                     }
                     // Inside a playlist the row's quick action removes the entry
                     // from the list; the file itself can only be trashed from the
@@ -416,8 +413,8 @@ struct TrackRowView: View {
                         }
                         .buttonStyle(PressableButtonStyle())
                         .help("Remove from Playlist")
-                        .opacity(hovering ? 1 : 0)
-                        .allowsHitTesting(hovering)
+                        .opacity(hover ? 1 : 0)
+                        .allowsHitTesting(hover)
                     } else {
                         Button(action: onDelete) {
                             Image(systemName: "trash")
@@ -427,8 +424,8 @@ struct TrackRowView: View {
                         }
                         .buttonStyle(PressableButtonStyle())
                         .help("Delete (move to Trash)")
-                        .opacity(hovering ? 1 : 0)
-                        .allowsHitTesting(hovering)
+                        .opacity(hover ? 1 : 0)
+                        .allowsHitTesting(hover)
                     }
                     if reorderID != nil {
                         DragDots()
@@ -441,8 +438,8 @@ struct TrackRowView: View {
                                     .onEnded { _ in onReorderEnded() }
                             )
                             .help("Drag to reorder")
-                            .opacity(hovering ? 1 : 0)
-                            .allowsHitTesting(hovering)
+                            .opacity(hover ? 1 : 0)
+                            .allowsHitTesting(hover)
                     }
                 }
             }
@@ -465,7 +462,7 @@ struct TrackRowView: View {
         .onHover { hovering = $0 }
         .onTapGesture(perform: onTap)
         .contextMenu { if let bulk { bulkMenu(bulk) } else { singleMenu } }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .animation(.easeOut(duration: 0.12), value: hover)
     }
 
     /// The normal single-track context menu.
@@ -557,17 +554,7 @@ struct TrackRowView: View {
         if isDragging { return Color(white: 0.16) }
         if isCurrent { return accent.opacity(0.16) }
         if isSelected { return .white.opacity(0.10) }
-        return hovering ? .white.opacity(0.07) : .clear
-    }
-}
-
-/// Collects each reorderable row's frame (keyed by id) in the list's coordinate
-/// space, so a drag can compute the target index from cursor position — no
-/// hit-testing, no lag.
-struct RowFrameKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
+        return hover ? .white.opacity(0.07) : .clear
     }
 }
 
@@ -734,37 +721,6 @@ extension View {
     }
 }
 
-/// Applied to a reorderable row: reports its frame, lifts it above the others
-/// while dragging, and offsets it to follow the cursor (its slot's midY keeps it
-/// glued to the finger as the rest shift).
-struct ReorderDragModifier: ViewModifier {
-    let id: String
-    let draggingID: String?
-    let cursorY: CGFloat
-    let frames: [String: CGRect]
-    /// When false (e.g. grouped view), do nothing — no frame reporting, so
-    /// expanding a section doesn't churn preferences and flicker.
-    var enabled: Bool = true
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content
-                .offset(y: draggingID == id ? cursorY - (frames[id]?.midY ?? cursorY) : 0)
-                .zIndex(draggingID == id ? 1 : 0)
-                .background(GeometryReader { proxy in
-                    // Only report frames while a drag is actually active. Reporting on
-                    // every scroll frame otherwise churns this preference (and the
-                    // parent's @State via onPreferenceChange), which showed up as
-                    // scroll jank / high CPU even when nothing was being dragged.
-                    Color.clear.preference(key: RowFrameKey.self,
-                                           value: draggingID != nil ? [id: proxy.frame(in: .named("reorder"))] : [:])
-                })
-        } else {
-            content
-        }
-    }
-}
-
 /// One row in the "Up Next" queue — compact, numbered, with a remove button on hover.
 struct QueueRowView: View {
     let track: Track
@@ -772,10 +728,14 @@ struct QueueRowView: View {
     let onRemove: () -> Void
     var reorderID: String? = nil
     var isDragging: Bool = false
+    /// See TrackRowView.dragActive — hush hover flashes while a drag scrolls the list.
+    var dragActive: Bool = false
     var onReorderChanged: (CGFloat) -> Void = { _ in }
     var onReorderEnded: () -> Void = {}
 
     @State private var hovering = false
+
+    private var hover: Bool { hovering && (!dragActive || isDragging) }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -819,14 +779,14 @@ struct QueueRowView: View {
                 .buttonStyle(PressableButtonStyle())
                 .help("Remove from queue")
             }
-            .opacity(hovering ? 1 : 0)
-            .allowsHitTesting(hovering)
+            .opacity(hover ? 1 : 0)
+            .allowsHitTesting(hover)
             .frame(width: reorderID == nil ? 24 : 42, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(isDragging ? Color(white: 0.16) : (hovering ? Color.white.opacity(0.06) : .clear)))
+            .fill(isDragging ? Color(white: 0.16) : (hover ? Color.white.opacity(0.06) : .clear)))
         .scaleEffect(isDragging ? 1.02 : 1)
         .shadow(color: isDragging ? .black.opacity(0.45) : .clear,
                 radius: isDragging ? 8 : 0, y: isDragging ? 4 : 0)
@@ -835,6 +795,6 @@ struct QueueRowView: View {
         .contextMenu {
             Button("Remove from Queue", role: .destructive, action: onRemove)
         }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .animation(.easeOut(duration: 0.12), value: hover)
     }
 }
