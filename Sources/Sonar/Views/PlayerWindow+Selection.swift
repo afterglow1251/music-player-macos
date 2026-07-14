@@ -15,30 +15,17 @@ extension PlayerWindow {
         return filteredTracks
     }
 
-    /// Move the keyboard cursor by `delta`, seeding at the playing row (if shown)
-    /// or an end when nothing is selected yet.
+    /// Move the keyboard cursor by `delta` (pure work in the reducer), then scroll
+    /// to it — only keyboard nav scrolls; playback-follow doesn't.
     func moveSelection(by delta: Int) {
-        let tracks = navigableTracks
-        guard !tracks.isEmpty else { return }
-        let index: Int
-        if let id = selectedTrackID, let i = tracks.firstIndex(where: { $0.id == id }) {
-            index = min(max(i + delta, 0), tracks.count - 1)
-        } else if let current = controller.currentTrack?.id,
-                  let i = tracks.firstIndex(where: { $0.id == current }) {
-            index = i
-        } else {
-            index = delta > 0 ? 0 : tracks.count - 1
+        if trackSelection.moveCursor(by: delta, in: navigableTracks, currentTrackID: controller.currentTrack?.id) {
+            scrollToSelectionNonce += 1
         }
-        selectedTrackID = tracks[index].id
-        lastClickedID = tracks[index].id   // keep the ⇧-click anchor on the keyboard cursor
-        selection = [tracks[index].id]   // arrow keys collapse any multi-selection to the cursor
-        selectionIsExplicit = true
-        scrollToSelectionNonce += 1   // only keyboard nav scrolls; playback-follow doesn't
     }
 
     /// Play the row under the cursor, in the scope matching the current source.
     func playSelectedTrack() {
-        guard let id = selectedTrackID,
+        guard let id = trackSelection.selectedTrackID,
               let track = navigableTracks.first(where: { $0.id == id }) else { return }
         if selectedPlaylist != nil {
             controller.play(track, in: playlistTracks)
@@ -50,10 +37,7 @@ extension PlayerWindow {
     /// A row click both plays the track and drops the cursor on it, so ↑/↓
     /// continue from there. Also collapses any multi-selection to this one row.
     private func selectAndPlay(_ track: Track, in scope: [Track]?) {
-        selectedTrackID = track.id
-        lastClickedID = track.id
-        selection = [track.id]
-        selectionIsExplicit = false   // side effect of playing, not a deliberate pick
+        trackSelection.pickForPlayback(track)
         controller.play(track, in: scope)
     }
 
@@ -61,48 +45,13 @@ extension PlayerWindow {
     /// (no playback), ⇧ selects the range from the anchor to the clicked row, and
     /// a plain click plays it (collapsing the selection to just that row). Keeps the
     /// Winamp-style click-to-play while layering standard macOS multi-select on top.
+    /// The modifier read stays here (AppKit); the pure mutations live in the reducer.
     func handleRowTap(_ track: Track, in scope: [Track]?) {
         let mods = NSEvent.modifierFlags
         if mods.contains(.command) {
-            if !selectionIsExplicit {
-                // The current `selection` is just the playback-follow highlight, not
-                // a deliberate pick. ⌘-clicking the playing track itself should
-                // promote it to an explicit selection (rather than toggling it back
-                // off) so it outlines. ⌘-clicking any other track starts a fresh
-                // explicit selection with just that row — otherwise the playing
-                // track would silently tag along and outline as if also picked.
-                selection = track.id == controller.currentTrack?.id ? selection.union([track.id]) : [track.id]
-                selectionIsExplicit = true
-            } else if selection.contains(track.id) {
-                selection.remove(track.id)
-            } else {
-                selection.insert(track.id)
-            }
-            selectedTrackID = track.id   // the ⌘-click becomes the latest pick
-            lastClickedID = track.id
+            trackSelection.toggleCommandClick(track, currentTrackID: controller.currentTrack?.id)
         } else if mods.contains(.shift) {
-            // ⇧-click extends a range only when there's a *live, deliberate*
-            // selection to anchor to — i.e. the anchor row is still explicitly
-            // selected right now. This is checked against live state, not a
-            // sticky flag, so the moment the selection is empty (fresh view,
-            // everything cleared, background-tapped away) or is merely the
-            // playback-follow highlight (a played track isn't a deliberate
-            // pick), this ⇧-click is a plain pick: it selects just this row and
-            // seeds the anchor, so the *next* ⇧-click ranges out from here.
-            let tracks = navigableTracks
-            if selectionIsExplicit,
-               let anchor = lastClickedID,
-               selection.contains(anchor),
-               let a = tracks.firstIndex(where: { $0.id == anchor }),
-               let b = tracks.firstIndex(where: { $0.id == track.id }) {
-                let range = a <= b ? a...b : b...a
-                selection = Set(tracks[range].map { $0.id })
-            } else {
-                selection = [track.id]
-                selectionIsExplicit = true
-            }
-            lastClickedID = track.id      // this click is now the newest anchor
-            selectedTrackID = track.id
+            trackSelection.extendShiftClick(to: track, in: navigableTracks)
         } else {
             selectAndPlay(track, in: scope)
         }
@@ -110,15 +59,12 @@ extension PlayerWindow {
 
     /// The selected tracks in on-screen order (empty when nothing is selected).
     private var selectedTracks: [Track] {
-        navigableTracks.filter { selection.contains($0.id) }
+        trackSelection.selectedTracks(in: navigableTracks)
     }
 
     /// Select every track in the current view (⌘A).
     func selectAll() {
-        let tracks = navigableTracks
-        guard !tracks.isEmpty else { return }
-        selection = Set(tracks.map { $0.id })
-        selectionIsExplicit = true
+        trackSelection.selectAll(in: navigableTracks)
     }
 
     /// Delete the whole selection through the failure-aware bulk path, then clear.
@@ -127,7 +73,7 @@ extension PlayerWindow {
         guard !tracks.isEmpty else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
             controller.delete(tracks)
-            selection.removeAll()
+            trackSelection.selection.removeAll()
         }
     }
 
@@ -135,7 +81,7 @@ extension PlayerWindow {
     /// multi-selection (more than one row selected and this row among them).
     /// `playlist` non-nil adds a "Remove from Playlist" bulk action.
     func bulkRowMenu(for track: Track, inPlaylist playlist: Playlist? = nil) -> BulkRowMenu? {
-        guard selection.contains(track.id), selection.count > 1 else { return nil }
+        guard trackSelection.selection.contains(track.id), trackSelection.selection.count > 1 else { return nil }
         let tracks = selectedTracks
         let favs = tracks.map { controller.favorites.isFavorite($0.url.path) }
         return BulkRowMenu(
@@ -151,7 +97,7 @@ extension PlayerWindow {
             onRemoveFromPlaylist: playlist.map { pl in
                 { withAnimation(.easeInOut(duration: 0.2)) {
                     for t in tracks { controller.playlists.remove(path: t.url.path, from: pl.id) }
-                    selection.removeAll()
+                    trackSelection.selection.removeAll()
                 } }
             },
             onDelete: { deleteSelection() }
@@ -172,11 +118,11 @@ extension PlayerWindow {
     /// Floating bar of bulk actions, shown while 2+ rows are selected. Mirrors the
     /// right-click bulk menu as visible, one-tap buttons pinned to the card's bottom.
     @ViewBuilder var selectionBar: some View {
-        if selection.count >= 2 {
+        if trackSelection.selection.count >= 2 {
             let tracks = selectedTracks
             let allFavorited = tracks.allSatisfy { controller.favorites.isFavorite($0.url.path) }
             HStack(spacing: 4) {
-                Text("\(selection.count)")
+                Text("\(trackSelection.selection.count)")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(accent)
                 Text("selected")
@@ -218,7 +164,7 @@ extension PlayerWindow {
                     selectionButton("text.badge.minus", help: "Remove from Playlist") {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             for t in tracks { controller.playlists.remove(path: t.url.path, from: playlist.id) }
-                            selection.removeAll()
+                            trackSelection.selection.removeAll()
                         }
                     }
                 } else {
@@ -227,7 +173,7 @@ extension PlayerWindow {
 
                 Divider().frame(height: 15).overlay(Color.white.opacity(0.15)).padding(.horizontal, 4)
                 selectionButton("xmark", help: "Clear selection", size: 11) {
-                    withAnimation(.easeInOut(duration: 0.2)) { selection.removeAll() }
+                    withAnimation(.easeInOut(duration: 0.2)) { trackSelection.selection.removeAll() }
                 }
             }
             .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 5)

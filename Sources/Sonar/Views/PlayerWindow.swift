@@ -13,18 +13,10 @@ struct PlayerWindow: View {
     @State var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
     @State var pillShowToken = 0             // coalesces "show the pill" across a source switch's transient reports
     @State var libViewportHeight: CGFloat = 0 // measured list viewport height
-    @State var selectedTrackID: Track.ID?    // keyboard cursor (also the ⇧-click range anchor)
-    /// The last row the user *deliberately* clicked (plain / ⌘ / ⇧) — the older of
-    /// the "last two" picks. A ⇧-click selects the range between it and the newly
-    /// clicked row. Set only by real clicks (and keyboard nav), never by
-    /// playback-follow, so the currently-playing track never silently acts as a
-    /// range end. Nil before any click.
-    @State var lastClickedID: Track.ID?
-    @State var selection: Set<Track.ID> = [] // multi-selection for bulk actions (⌘/⇧-click)
-    /// True when `selection` was made deliberately (⌘/⇧-click, ⌘A, arrow keys) as
-    /// opposed to falling out of a click-to-play or playback-follow, which also set
-    /// it. An explicit selection outlines even the playing row.
-    @State var selectionIsExplicit = false
+    /// The keyboard/selection model (cursor, ⇧-anchor, multi-selection,
+    /// explicitness) as one value-type reducer — a single `@State`, so it
+    /// invalidates the same way the four separate `@State` vars used to.
+    @State var trackSelection = TrackSelection()
     @State var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
     @State var suppressTopResetOnce = false  // skip the next source-switch scroll restore (goToCurrentTrack centres instead)
     @State var scrollMemory: [Playlist.ID?: CGFloat] = [:]  // per-source scroll offset, so each source reopens where you left it
@@ -112,9 +104,9 @@ struct PlayerWindow: View {
                 searchText = ""
                 searchFieldFocused = false
                 return true
-            } else if selection.count > 1 {
-                selection.removeAll()          // clear the whole multi-selection
-                selectionIsExplicit = false
+            } else if trackSelection.selection.count > 1 {
+                trackSelection.selection.removeAll()          // clear the whole multi-selection
+                trackSelection.selectionIsExplicit = false
                 return true
             } else if urlFieldFocused || searchFieldFocused {
                 dismissFocus()
@@ -191,7 +183,7 @@ struct PlayerWindow: View {
         .background(
             backdrop
                 .contentShape(Rectangle())
-                .onTapGesture { dismissFocus(); selection.removeAll() }
+                .onTapGesture { dismissFocus(); trackSelection.selection.removeAll() }
         )
         .overlay(alignment: .bottom) { bottomToasts }
         // Drag & drop audio files or a YouTube link onto the window.
@@ -215,9 +207,9 @@ struct PlayerWindow: View {
                 withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
                 searchText = ""
                 searchFieldFocused = false
-            } else if selection.count > 1 {
-                selection = selectedTrackID.map { [$0] } ?? []   // collapse a multi-selection first
-                selectionIsExplicit = false
+            } else if trackSelection.selection.count > 1 {
+                trackSelection.selection = trackSelection.selectedTrackID.map { [$0] } ?? []   // collapse a multi-selection first
+                trackSelection.selectionIsExplicit = false
             } else {
                 dismissFocus()
             }

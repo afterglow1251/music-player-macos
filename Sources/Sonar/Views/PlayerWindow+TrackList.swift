@@ -203,15 +203,7 @@ extension PlayerWindow {
             // lingers on the previous row. No scroll here — the "Now playing" pill
             // already offers a jump when the current track is off-screen.
             .onChange(of: controller.currentTrack) { _, track in
-                selectedTrackID = track?.id
-                // The row outline is driven by `selection`, so collapse a single
-                // selection onto the new track to keep the border with playback.
-                // An active multi-selection (bulk action in progress) is left
-                // untouched so we don't wipe the user's in-progress pick.
-                if selection.count <= 1 {
-                    selection = track.map { [$0.id] } ?? []
-                    selectionIsExplicit = false   // playback-follow, not a user pick
-                }
+                trackSelection.followPlayback(to: track)
             }
             // Switching source (LIBRARY ↔ playlist, or between playlists) reuses this
             // one ScrollView, so the outgoing list's scroll offset would otherwise
@@ -266,7 +258,7 @@ extension PlayerWindow {
             // cursor merely follows a track change — that would yank the list.
             .onChange(of: scrollToSelectionNonce) { _, _ in
                 scrollRestorer.cancel()   // keyboard nav supersedes an in-flight restore
-                guard let id = selectedTrackID else { return }
+                guard let id = trackSelection.selectedTrackID else { return }
                 let tracks = navigableTracks
                 if id == tracks.last?.id {
                     // Animate like a middle-row step so the scroller fades the same
@@ -360,8 +352,8 @@ extension PlayerWindow {
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
-            isSelected: selection.contains(track.id),
-            selectionIsExplicit: selectionIsExplicit,
+            isSelected: trackSelection.selection.contains(track.id),
+            selectionIsExplicit: trackSelection.selectionIsExplicit,
             durationText: clockTimeString(track.duration),
             onTap: { handleRowTap(track, in: libraryPlaybackScope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
@@ -400,8 +392,8 @@ extension PlayerWindow {
             track: track,
             isCurrent: controller.currentTrack == track,
             isPlaying: engine.isPlaying,
-            isSelected: selection.contains(track.id),
-            selectionIsExplicit: selectionIsExplicit,
+            isSelected: trackSelection.selection.contains(track.id),
+            selectionIsExplicit: trackSelection.selectionIsExplicit,
             durationText: clockTimeString(track.duration),
             onTap: { handleRowTap(track, in: scope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },

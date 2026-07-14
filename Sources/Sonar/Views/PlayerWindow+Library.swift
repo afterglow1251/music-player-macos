@@ -28,7 +28,7 @@ extension PlayerWindow {
         // Playlist / Queue / Delete are one visible tap away — not hidden behind a
         // right-click. Slides up from the bottom of the card when 2+ rows are picked.
         .overlay(alignment: .bottom) { selectionBar }
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: selection.count >= 2)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: trackSelection.selection.count >= 2)
         // Transparent fill in fullscreen so it blends with the dark backdrop, but
         // always keep a border so the panel still has defined edges. Both live in
         // .background (not .overlay) so the border never paints over content that
