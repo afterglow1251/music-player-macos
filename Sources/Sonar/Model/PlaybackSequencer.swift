@@ -31,11 +31,17 @@ enum PlaybackSequencer {
     }
 
     /// The next step when a track ends (`auto == true`) or the user hits ⏭.
+    ///
+    /// `resumeAnchor` is the last scope track played before the queue interjected:
+    /// once the queue drains, the walk picks up from *there* so the playlist keeps
+    /// going, instead of stranding you wherever the queued (usually off-scope)
+    /// track happened to land.
     static func nextDecision(auto: Bool,
                              current: Track?,
                              library: [Track],
                              scope: [Track],
                              queueFront: Track?,
+                             resumeAnchor: Track? = nil,
                              shuffle: Bool,
                              repeatMode: RepeatMode,
                              sleepUntilEndOfTrack: Bool) -> PlaybackDecision {
@@ -46,12 +52,24 @@ enum PlaybackSequencer {
             let list = activeScope(current: current, scope: scope, library: library)
             return .play(current, scope: list, fromQueue: false)
         }
-        // The queue overrides the normal order and plays in the library scope.
-        if let queued = queueFront { return .play(queued, scope: library, fromQueue: true) }
+        // The queue overrides the normal order but stays inside the current scope,
+        // so the source (playlist / library) survives the interruption.
+        if let queued = queueFront { return .play(queued, scope: scope, fromQueue: true) }
 
-        let list = activeScope(current: current, scope: scope, library: library)
+        // Walk reference: normally the current track, but if it has left the scope
+        // (it was a queued interjection) resume from the anchor parked in the scope.
+        let list: [Track]
+        let reference: Track?
+        if let current, scope.contains(current) {
+            list = scope; reference = current
+        } else if let anchor = resumeAnchor, scope.contains(anchor) {
+            list = scope; reference = anchor
+        } else {
+            list = activeScope(current: current, scope: scope, library: library)
+            reference = current
+        }
         guard !list.isEmpty else { return .none }
-        guard let index = list.firstIndex(where: { $0 == current }) else {
+        guard let index = list.firstIndex(where: { $0 == reference }) else {
             return .play(list[0], scope: list, fromQueue: false)
         }
         if shuffle { return .playRandom(in: list, excluding: index, scope: list) }
@@ -61,13 +79,5 @@ enum PlaybackSequencer {
         if repeatMode == .all { return .play(list[0], scope: list, fromQueue: false) }
         if auto { return .stopAtEnd }              // reached the end
         return .play(list[0], scope: list, fromQueue: false)   // manual ⏭ wraps around
-    }
-
-    /// The step for ⏮ (after the "restart current track if >3s in" check, which
-    /// is the controller's job since it needs the engine's playhead).
-    static func previousDecision(current: Track?, activeScope list: [Track], shuffle: Bool) -> PlaybackDecision {
-        guard !list.isEmpty, let index = list.firstIndex(where: { $0 == current }) else { return .none }
-        if shuffle { return .playRandom(in: list, excluding: index, scope: list) }
-        return .play(list[index > 0 ? index - 1 : list.count - 1], scope: list, fromQueue: false)
     }
 }

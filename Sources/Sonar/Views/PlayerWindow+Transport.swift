@@ -131,8 +131,14 @@ extension PlayerWindow {
             HStack(spacing: 5) {
                 NowPlayingBars(color: Theme.logo,
                                animating: engine.isPlaying && windowOcclusion.isVisible)
+                // The source keeps naming the playlist/library even while a queued
+                // track is playing — the queue is an overlay on it — so a muted
+                // "· from queue" note carries that fact instead of a separate badge.
                 (Text("Playing from ").foregroundStyle(.white.opacity(0.4))
-                    + Text(name).foregroundStyle(.white.opacity(0.75)))
+                    + Text(name).foregroundStyle(.white.opacity(0.75))
+                    + (controller.playingFromQueue
+                        ? Text("  ·  from queue").foregroundStyle(Theme.logo.opacity(0.85))
+                        : Text("")))
                     .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
             }

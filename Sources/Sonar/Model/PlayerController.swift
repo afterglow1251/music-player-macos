@@ -52,6 +52,11 @@ final class PlayerController: ObservableObject {
     /// still points at the one that's actually playing, so the UI can mark it.
     /// Set only on user-initiated plays; auto next/previous keep the same source.
     @Published private(set) var playingSourceID: Playlist.ID?
+
+    /// True while the current track came off the play queue. The source label
+    /// keeps naming the underlying playlist/library (the queue is an overlay on it,
+    /// not a new source), so this flags the "· from queue" note beside it.
+    @Published private(set) var playingFromQueue = false
     @Published var urlInput: String = ""
 
     /// Tracks the user lined up to play next, overriding the normal library order.
@@ -190,116 +195,157 @@ final class PlayerController: ObservableObject {
 
     // MARK: Playback
 
-    /// The ordered list we're currently playing through. Playing a group/playlist
-    /// sets it to that group's tracks; a plain library tap resets it to the library.
+    // MARK: - Playback spine
+    //
+    // Two layers. The *context* is the source you're playing through (a playlist or
+    // the library) with a position — it generates new tracks when you reach the
+    // front. The *history* is the linear record of what actually played; ⏮ / ⏭ walk
+    // it, replaying queued interjections and all. The context is frozen while a
+    // queued track plays or while you retrace, so the source survives both.
+
+    /// The linear play record — the spine of ⏮ / ⏭. Its `current` entry drives
+    /// every UI mirror (`currentTrack`, `playingSourceID`, `playingFromQueue`), so
+    /// the label can never disagree with what's playing.
+    private var history = PlayHistory()
+
+    /// The context list forward generation walks (a playlist's tracks, or the
+    /// library). Frozen while a queued track plays / while retracing.
     private var scope: [Track] = []
 
-    // Real shuffle state: a "bag" (every track plays once before any repeat) and a
-    // history of what actually played (so ⏮/⏭ step through it rather than re-roll).
+    /// The source id (nil = library) that *newly generated* context tracks get
+    /// stamped with. The label reads the current history entry's source, not this.
+    private var liveSourceID: Playlist.ID?
+
+    /// The context's linear position — the last context (non-queue) track. When the
+    /// queue drains, generation resumes from here so the playlist carries on instead
+    /// of stranding us on the off-scope queued track. Frozen while queued tracks chain.
+    private var resumeAnchor: Track?
+
+    // Shuffle only needs the "bag" now (every track plays once before any repeat);
+    // the played order it used to track lives in `history`, shared with linear mode.
     private var shuffleBag: [Track] = []       // upcoming this cycle, pre-shuffled
-    private var shuffleHistory: [Track] = []   // played order
-    private var shuffleCursor = -1             // index in shuffleHistory of the current track
     private var shuffleUniverse: [Track] = []  // the list the bag was built from
 
     /// Tracks that next/previous walk through: the active scope if it still holds
-    /// the current track, otherwise the whole library.
-    private var activeScope: [Track] {
-        PlaybackSequencer.activeScope(current: currentTrack, scope: scope, library: library.tracks)
-    }
-
-    func play(_ track: Track, in scope: [Track]? = nil) {
-        let list = scope ?? library.tracks
-        self.scope = list
-        currentTrack = track
-        syncShuffleHistory(playing: track, in: list)
-        engine.load(url: track.url)
+    /// Publish the current history entry to the UI mirrors and load it into the
+    /// engine. The single funnel every play / retrace goes through, so the label
+    /// (`playingSourceID` + `playingFromQueue`) always matches what's audible.
+    private func activateCurrentEntry() {
+        guard let entry = history.current else { return }
+        playingSourceID = entry.sourceID
+        playingFromQueue = entry.fromQueue
+        currentTrack = entry.track
+        engine.load(url: entry.track.url)
         updateNowPlaying()
         save()
     }
 
-    /// A user-initiated play from a known browse source, which records that
-    /// source (nil = library) for the UI. The plain `play(_:in:)` above is left
-    /// for auto next/previous, which must NOT change the playing source.
+    /// Record a freshly-chosen track as the new head of history and play it. A
+    /// queued interjection freezes the context (scope / anchor / bag untouched); a
+    /// context track advances the linear anchor.
+    private func playNewEntry(_ track: Track, fromQueue: Bool) {
+        if !fromQueue { resumeAnchor = track }
+        history.push(PlayHistoryEntry(track: track, sourceID: liveSourceID, fromQueue: fromQueue))
+        activateCurrentEntry()
+    }
+
+    /// A user-initiated play from a browse source — the start of a fresh context.
+    /// Records the source for forward generation and the label, reseeds shuffle, and
+    /// forks a new head in the history.
     func play(_ track: Track, from source: Playlist.ID?, in scope: [Track]?) {
-        playingSourceID = source
-        play(track, in: scope)
+        let list = scope ?? library.tracks
+        self.scope = list
+        liveSourceID = source
+        reseedShuffle(for: list, avoiding: track)
+        playNewEntry(track, fromQueue: false)
     }
 
-    /// Play a whole group (playlist / artist section) as the new scope.
-    func playGroup(_ tracks: [Track]) {
-        guard let first = tracks.first else { return }
-        play(first, in: tracks)
-    }
-
-    /// Play a whole group as a user-initiated action, recording its source.
+    /// Play a whole group (playlist / artist section) as a new context, from its
+    /// first track.
     func playGroup(_ tracks: [Track], from source: Playlist.ID?) {
-        playingSourceID = source
-        playGroup(tracks)
+        guard let first = tracks.first else { return }
+        play(first, from: source, in: tracks)
     }
 
     /// Play/pause. If nothing is loaded yet, start the first track in the library.
     func togglePlayPause() {
         if currentTrack == nil {
-            if let first = library.tracks.first { play(first) }
+            if let first = library.tracks.first { play(first, from: nil, in: library.tracks) }
             return
         }
         engine.togglePlayPause()
     }
 
     func next(auto: Bool = false) {
+        // Repeat-one replays the current track in place — no history churn.
+        if auto, repeatMode == .one, currentTrack != nil {
+            engine.seek(to: 0); engine.play(); return
+        }
+        // Sleep "until end of track" fires here (auto-advance only): the track just
+        // ended, so clear the timer and stop rather than advance.
+        if auto, sleepMode == .endOfTrack { setSleep(.off); return }
+        // Retrace forward through what already played before generating anything new.
+        if !history.atHead {
+            _ = history.stepForward()
+            activateCurrentEntry()
+            return
+        }
+        generateNext(auto: auto)
+    }
+
+    /// Generate and play the next track when we're at the head of history: the queue
+    /// overrides, otherwise walk the context (playlist / library / shuffle).
+    private func generateNext(auto: Bool) {
         let decision = PlaybackSequencer.nextDecision(
             auto: auto, current: currentTrack, library: library.tracks, scope: scope,
-            queueFront: queue.first?.track, shuffle: shuffle, repeatMode: repeatMode,
-            sleepUntilEndOfTrack: sleepMode == .endOfTrack)
+            queueFront: queue.first?.track, resumeAnchor: resumeAnchor, shuffle: shuffle,
+            repeatMode: repeatMode, sleepUntilEndOfTrack: false)
         switch decision {
-        case .none:
+        case .none, .stopForSleep:
             return
-        case .stopForSleep:
-            setSleep(.off)                          // track ended naturally; just clear the timer
         case .stopAtEnd:
             engine.stop()
-        case .play(let track, let scope, let fromQueue):
-            if fromQueue { queue.removeFirst(); play(track) }   // queue plays in the library scope
-            else { play(track, in: scope) }
+        case .play(let track, _, let fromQueue):
+            if fromQueue { queue.removeFirst() }
+            playNewEntry(track, fromQueue: fromQueue)
         case .playRandom(let list, _, _):
-            play(nextShuffleTrack(in: list), in: list)
+            playNewEntry(nextShuffleTrack(in: list), fromQueue: false)
         }
     }
 
     func previous() {
+        // >3s in: restart the current track (standard transport feel).
         if engine.currentTime > 3 { engine.seek(to: 0); return }
-        switch PlaybackSequencer.previousDecision(current: currentTrack, activeScope: activeScope, shuffle: shuffle) {
-        case .play(let track, let scope, _):
-            play(track, in: scope)
-        case .playRandom(let list, _, _):
-            if let prev = previousShuffleTrack() { play(prev, in: list) }
-            else { engine.seek(to: 0) }   // at the start of shuffle history → restart current
-        case .none, .stopForSleep, .stopAtEnd:
-            return
-        }
+        // Otherwise step back through the real play history — queued tracks included.
+        guard history.canStepBack else { engine.seek(to: 0); return }
+        _ = history.stepBack()
+        activateCurrentEntry()
     }
 
     /// The URL that will play next, WITHOUT side effects — the engine preloads it
-    /// for a gapless join. Shares `nextDecision` with `next(auto:)`, so the
-    /// preloaded track can't disagree with what actually plays. nil when playback
-    /// should stop or the transition can't be gapless (shuffle picks at advance).
+    /// for a gapless join. Only at the head (retrace reloads); nil when playback
+    /// should stop or the pick isn't gapless (shuffle draws at advance, repeat-one
+    /// and end-of-track sleep loop / stop in place).
     private func peekNextURL() -> URL? {
+        guard history.atHead, repeatMode != .one, sleepMode != .endOfTrack else { return nil }
         let decision = PlaybackSequencer.nextDecision(
             auto: true, current: currentTrack, library: library.tracks, scope: scope,
-            queueFront: queue.first?.track, shuffle: shuffle, repeatMode: repeatMode,
-            sleepUntilEndOfTrack: sleepMode == .endOfTrack)
+            queueFront: queue.first?.track, resumeAnchor: resumeAnchor, shuffle: shuffle,
+            repeatMode: repeatMode, sleepUntilEndOfTrack: false)
         if case .play(let track, _, _) = decision { return track.url }
         return nil
     }
 
-    /// Reconcile our state to a track the engine has already advanced to
-    /// gaplessly — no `play()` / reload, the audio is already flowing.
+    /// Reconcile our state to a track the engine already advanced to gaplessly — no
+    /// reload, the audio is flowing. Mirrors `generateNext` minus the engine work;
+    /// only ever fires for a head-of-history generated track (see `peekNextURL`).
     private func commitAdvance(to url: URL) {
         guard let track = library.tracks.first(where: { $0.url == url }) else { return }
-        if queue.first?.track.url == url {
-            queue.removeFirst()
-            scope = library.tracks          // a queued track plays in the library scope, like play()
-        }
+        let fromQueue = (queue.first?.track.url == url)
+        if fromQueue { queue.removeFirst() } else { resumeAnchor = track }
+        history.push(PlayHistoryEntry(track: track, sourceID: liveSourceID, fromQueue: fromQueue))
+        playingSourceID = liveSourceID
+        playingFromQueue = fromQueue
         currentTrack = track
         updateNowPlaying()
         save()
@@ -316,6 +362,7 @@ final class PlayerController: ObservableObject {
             updateNowPlaying()
         }
         queue.removeAll { $0.track == track }
+        history.remove { $0.track == track }
     }
 
     /// Delete several tracks (multi-select). Each goes through the same failure-
@@ -332,6 +379,7 @@ final class PlayerController: ObservableObject {
                 stoppedCurrent = true
             }
             queue.removeAll { $0.track == track }
+            history.remove { $0.track == track }
         }
         if stoppedCurrent { updateNowPlaying() }
         if failed > 0 {
@@ -413,55 +461,32 @@ final class PlayerController: ObservableObject {
         return playlist
     }
 
-    // MARK: Shuffle bag + history
+    // MARK: Shuffle bag
 
-    /// Next track under shuffle: walk forward through history if the user had
-    /// stepped back, otherwise draw the next from the bag (refilling+reshuffling it
-    /// when empty, so every track plays once before any repeat).
+    /// Next track under shuffle — draw from the bag, refilling + reshuffling it when
+    /// empty so every track plays once before any repeat. The *played order* lives
+    /// in `history` now (shared with linear mode), so ⏮ / ⏭ retrace happens there,
+    /// not here.
     private func nextShuffleTrack(in list: [Track]) -> Track {
         reseedShuffleIfNeeded(for: list)
-        if shuffleCursor >= 0, shuffleCursor + 1 < shuffleHistory.count {
-            shuffleCursor += 1                       // ⏮ then ⏭ → forward through history
-            return shuffleHistory[shuffleCursor]
-        }
         if shuffleBag.isEmpty { refillShuffleBag(avoiding: currentTrack) }
-        let track = shuffleBag.popLast() ?? currentTrack ?? list[0]
-        shuffleHistory.append(track)
-        shuffleCursor = shuffleHistory.count - 1
-        return track
+        return shuffleBag.popLast() ?? currentTrack ?? list[0]
     }
 
-    /// Previous track under shuffle — step back through the played history. nil at
-    /// the start of history (the caller restarts the current track instead).
-    private func previousShuffleTrack() -> Track? {
-        guard shuffleCursor > 0 else { return nil }
-        shuffleCursor -= 1
-        return shuffleHistory[shuffleCursor]
-    }
-
-    /// Keep the shuffle history/bag consistent with whatever actually starts
-    /// playing. The navigator's own picks are already recorded (a no-op here); a
-    /// manual pick / queue / group jump reseeds the history so ⏮ and the bag
-    /// continue from the new track.
-    private func syncShuffleHistory(playing track: Track, in list: [Track]) {
+    /// Reseed the bag for a brand-new context (a user pick / group play), excluding
+    /// the track about to play. No-op when shuffle is off — the bag reseeds lazily
+    /// on the first shuffle generation instead.
+    private func reseedShuffle(for list: [Track], avoiding: Track?) {
         guard shuffle else { return }
-        if shuffleUniverse == list, shuffleCursor >= 0, shuffleCursor < shuffleHistory.count,
-           shuffleHistory[shuffleCursor] == track {
-            return
-        }
         shuffleUniverse = list
-        shuffleHistory = [track]
-        shuffleCursor = 0
-        refillShuffleBag(avoiding: track)
+        refillShuffleBag(avoiding: avoiding)
     }
 
-    /// Rebuild the bag/history when the shuffle universe (the list we walk) changes
-    /// — e.g. switching from the library to a playlist.
+    /// Rebuild the bag when the shuffle universe (the list we walk) changes — e.g.
+    /// switching from the library to a playlist, or shuffle toggled back on.
     private func reseedShuffleIfNeeded(for list: [Track]) {
         guard shuffleUniverse != list else { return }
         shuffleUniverse = list
-        shuffleHistory = currentTrack.map { [$0] } ?? []
-        shuffleCursor = shuffleHistory.count - 1
         refillShuffleBag(avoiding: currentTrack)
     }
 
@@ -469,11 +494,11 @@ final class PlayerController: ObservableObject {
         shuffleBag = shuffleUniverse.filter { $0 != avoiding }.shuffled()
     }
 
-    /// Drop all shuffle memory — toggling shuffle re-seeds from the next play.
+    /// Drop the shuffle bag — toggling shuffle re-seeds from the next generation.
+    /// The play history is left alone; it's the record of what played, not shuffle
+    /// state, so ⏮ still retraces across a shuffle toggle.
     private func resetShuffle() {
         shuffleBag = []
-        shuffleHistory = []
-        shuffleCursor = -1
         shuffleUniverse = []
     }
 
@@ -669,6 +694,13 @@ final class PlayerController: ObservableObject {
         // Read the saved position BEFORE loading — engine.load() calls stop(),
         // which resets currentTime to 0 and would clobber the stored value.
         let position = prefs.lastPosition
+        // Adopt the restored track as the context + the sole history entry, so ⏮/⏭
+        // and forward generation have a valid starting point. Source isn't persisted,
+        // so it restores as the library.
+        scope = library.tracks
+        liveSourceID = nil
+        resumeAnchor = track
+        history.reset(to: PlayHistoryEntry(track: track, sourceID: nil, fromQueue: false))
         currentTrack = track
         engine.load(url: track.url, autoplay: false)
         if position > 1 { engine.seek(to: position) }

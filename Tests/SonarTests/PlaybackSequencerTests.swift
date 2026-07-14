@@ -81,6 +81,49 @@ struct PlaybackSequencerTests {
         #expect(decision == .play(c, scope: [a, b, c], fromQueue: true))
     }
 
+    /// A queued track plays inside the *current scope* (a playlist), not the whole
+    /// library — the source survives the interruption.
+    @Test func queuedTrackStaysInTheCurrentScope() {
+        let decision = PlaybackSequencer.nextDecision(
+            auto: true, current: a, library: [a, b, c, notInList], scope: [a, b],
+            queueFront: notInList, shuffle: false, repeatMode: .off, sleepUntilEndOfTrack: false)
+        #expect(decision == .play(notInList, scope: [a, b], fromQueue: true))
+    }
+
+    // MARK: - nextDecision: resume after the queue
+
+    /// Once the queue drains, playback resumes the playlist from the anchor (the
+    /// scope track we left), not from the off-scope queued track.
+    @Test func resumesPlaylistFromTheAnchorAfterTheQueue() {
+        // Current is the just-finished queued track, absent from the playlist scope.
+        let decision = PlaybackSequencer.nextDecision(
+            auto: true, current: notInList, library: [a, b, c, notInList], scope: [a, b, c],
+            queueFront: nil, resumeAnchor: a, shuffle: false, repeatMode: .off,
+            sleepUntilEndOfTrack: false)
+        #expect(decision == .play(b, scope: [a, b, c], fromQueue: false))
+    }
+
+    /// The anchor drives shuffle too — the next random draw stays inside the scope,
+    /// excluding the anchor's index.
+    @Test func resumeAnchorSeedsShuffleWithinTheScope() {
+        let decision = PlaybackSequencer.nextDecision(
+            auto: true, current: notInList, library: [a, b, c, notInList], scope: [a, b, c],
+            queueFront: nil, resumeAnchor: b, shuffle: true, repeatMode: .off,
+            sleepUntilEndOfTrack: false)
+        #expect(decision == .playRandom(in: [a, b, c], excluding: 1, scope: [a, b, c]))
+    }
+
+    /// With no usable anchor (or one no longer in the scope), an off-scope current
+    /// falls back to walking the library, as before.
+    @Test func offScopeCurrentWithoutAnchorFallsBackToLibrary() {
+        let decision = PlaybackSequencer.nextDecision(
+            auto: true, current: notInList, library: [a, b, c, notInList], scope: [a, b],
+            queueFront: nil, resumeAnchor: nil, shuffle: false, repeatMode: .off,
+            sleepUntilEndOfTrack: false)
+        // notInList is library index 3 → next is end-of-library with repeat off.
+        #expect(decision == .stopAtEnd)
+    }
+
     // MARK: - nextDecision: shuffle
 
     @Test func shuffleReturnsARandomDrawExcludingTheCurrentIndex() {
@@ -132,30 +175,5 @@ struct PlaybackSequencerTests {
             auto: true, current: nil, library: [], scope: [],
             queueFront: nil, shuffle: false, repeatMode: .off, sleepUntilEndOfTrack: false)
         #expect(decision == .none)
-    }
-
-    // MARK: - previousDecision
-
-    @Test func previousOnAnEmptyListIsNone() {
-        #expect(PlaybackSequencer.previousDecision(current: nil, activeScope: [], shuffle: false) == .none)
-    }
-
-    @Test func previousWhenCurrentIsNotInTheListIsNone() {
-        #expect(PlaybackSequencer.previousDecision(current: notInList, activeScope: [a, b, c], shuffle: false) == .none)
-    }
-
-    @Test func previousShufflesToARandomDrawExcludingTheCurrentIndex() {
-        let decision = PlaybackSequencer.previousDecision(current: b, activeScope: [a, b, c], shuffle: true)
-        #expect(decision == .playRandom(in: [a, b, c], excluding: 1, scope: [a, b, c]))
-    }
-
-    @Test func previousStepsBackToTheEarlierTrack() {
-        let decision = PlaybackSequencer.previousDecision(current: b, activeScope: [a, b, c], shuffle: false)
-        #expect(decision == .play(a, scope: [a, b, c], fromQueue: false))
-    }
-
-    @Test func previousWrapsToTheLastTrackFromTheStart() {
-        let decision = PlaybackSequencer.previousDecision(current: a, activeScope: [a, b, c], shuffle: false)
-        #expect(decision == .play(c, scope: [a, b, c], fromQueue: false))
     }
 }
