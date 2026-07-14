@@ -117,7 +117,10 @@ extension PlayerWindow {
     var visualizerStrip: some View {
         VisualizerView(engine: engine, mode: $visualizerMode, theme: controller.theme,
                        rows: isFullscreen ? 22 : 16, columnScale: isFullscreen ? 2 : 1,
-                       transparentBackground: isFullscreen,
+                       // Transparent in both modes so the ambient cover-tinted
+                       // backdrop shows through the gaps between the tiles
+                       // instead of a black block breaking the wash.
+                       transparentBackground: true,
                        suspended: !windowOcclusion.isVisible)
             .frame(height: isFullscreen ? 88 : 48)
             .frame(maxWidth: .infinity)

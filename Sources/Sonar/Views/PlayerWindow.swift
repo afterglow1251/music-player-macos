@@ -87,6 +87,8 @@ struct PlayerWindow: View {
         // Enable the native green fullscreen button / ⌃⌘F, and track its state so
         // we can swap in the immersive visualizer when the window goes fullscreen.
         .background(FullscreenEnabler())
+        // Open snug to the fixed-width content — no empty margins beside it.
+        .background(WindowWidthSnapper())
         // Esc handling for BOTH modes, via a local NSEvent monitor that fires
         // before the window: we swallow the key (return true) whenever there's an
         // open layer to peel back — a section (settings/lyrics), the search, or a
@@ -254,10 +256,26 @@ struct PlayerWindow: View {
 
     // MARK: Backdrop (blurred artwork behind everything)
 
-    /// Solid black — song/video covers are usually on black, so a uniform black
-    /// window makes the artwork blend in seamlessly (no "extra" backdrop).
+    /// A blurred wash of the current cover behind the whole player, so the window
+    /// takes on the song's colours instead of sitting on flat black — the same
+    /// ambient treatment the fullscreen layout uses, sized for the window. With
+    /// no artwork it's just black.
     private var backdrop: some View {
-        Color.black
+        ZStack {
+            Color.black
+            if let image = artworkImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: 70)
+                    .opacity(0.32)
+                    .scaleEffect(1.3)
+            }
+            // Darken toward the bottom so the library rows and controls stay
+            // legible over brighter covers.
+            LinearGradient(colors: [.black.opacity(0.2), .black.opacity(0.62)],
+                           startPoint: .top, endPoint: .bottom)
+        }
     }
 
     /// Fuzzy-rank a (non-empty) query against the library. Static & pure so it can

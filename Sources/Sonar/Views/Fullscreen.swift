@@ -15,6 +15,36 @@ struct FullscreenEnabler: NSViewRepresentable {
     }
 }
 
+/// Shrinks the window to its content's natural width the first time it lands on
+/// screen, so the fixed-width player opens snug instead of centered inside a
+/// wider frame with empty margins down both sides. Only the width is snapped
+/// (the height is left alone), and never while fullscreen — the window stays
+/// resizable, this just sets a tidy initial width. A restored-too-wide frame
+/// from a previous run is corrected the same way.
+struct WindowWidthSnapper: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { SnappingView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class SnappingView: NSView {
+        private var didSnap = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard !didSnap, let window else { return }
+            didSnap = true
+            // Defer one runloop turn so the SwiftUI content has laid out and its
+            // fittingSize reports the real content width, not a placeholder.
+            DispatchQueue.main.async {
+                guard !window.styleMask.contains(.fullScreen),
+                      let content = window.contentView else { return }
+                let fit = content.fittingSize.width
+                guard fit > 100, fit < content.frame.width else { return }
+                window.setContentSize(NSSize(width: fit, height: content.frame.height))
+            }
+        }
+    }
+}
+
 /// Intercepts the Escape key *before* AppKit's window machinery sees it, so a
 /// press can close an open in-app layer (settings, lyrics, search, a multi-
 /// selection) without macOS also collapsing native fullscreen. macOS leaves
