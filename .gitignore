@@ -7,6 +7,9 @@
 Sonar.app/
 Sonar.iconset/
 
+# Packaged release zips (produced by scripts/release.sh)
+dist/
+
 # macOS
 .DS_Store
 
