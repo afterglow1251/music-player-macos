@@ -5,81 +5,81 @@ import UniformTypeIdentifiers
 /// The main player window — a modern retro-skinned player: a big uncropped cover,
 /// a blurred artwork backdrop, glassy panels, and the classic tile visualizer.
 struct PlayerWindow: View {
-    @StateObject private var controller = PlayerController.shared
-    @State private var isFullscreen = false
-    @State private var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
-    @State private var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
-    @State private var jumpGeneration = 0            // invalidates a pending "jump to current track" when the source changes
-    @State private var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
-    @State private var pillShowToken = 0             // coalesces "show the pill" across a source switch's transient reports
-    @State private var libViewportHeight: CGFloat = 0 // measured list viewport height
-    @State private var selectedTrackID: Track.ID?    // keyboard cursor (also the ⇧-click range anchor)
+    @StateObject var controller = PlayerController.shared
+    @State var isFullscreen = false
+    @State var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
+    @State var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
+    @State var jumpGeneration = 0            // invalidates a pending "jump to current track" when the source changes
+    @State var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
+    @State var pillShowToken = 0             // coalesces "show the pill" across a source switch's transient reports
+    @State var libViewportHeight: CGFloat = 0 // measured list viewport height
+    @State var selectedTrackID: Track.ID?    // keyboard cursor (also the ⇧-click range anchor)
     /// The last row the user *deliberately* clicked (plain / ⌘ / ⇧) — the older of
     /// the "last two" picks. A ⇧-click selects the range between it and the newly
     /// clicked row. Set only by real clicks (and keyboard nav), never by
     /// playback-follow, so the currently-playing track never silently acts as a
     /// range end. Nil before any click.
-    @State private var lastClickedID: Track.ID?
-    @State private var selection: Set<Track.ID> = [] // multi-selection for bulk actions (⌘/⇧-click)
+    @State var lastClickedID: Track.ID?
+    @State var selection: Set<Track.ID> = [] // multi-selection for bulk actions (⌘/⇧-click)
     /// True when `selection` was made deliberately (⌘/⇧-click, ⌘A, arrow keys) as
     /// opposed to falling out of a click-to-play or playback-follow, which also set
     /// it. An explicit selection outlines even the playing row.
-    @State private var selectionIsExplicit = false
-    @State private var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
-    @State private var suppressTopResetOnce = false  // skip the next source-switch scroll restore (goToCurrentTrack centres instead)
-    @State private var scrollMemory: [Playlist.ID?: CGFloat] = [:]  // per-source scroll offset, so each source reopens where you left it
-    @State private var scrollRestorer = ScrollOffsetRestorer()      // chases a remembered offset across the lazy content swap
-    private static let listBottomAnchorID = "nav-list-bottom"  // tail scroll anchor for the last row
-    private static let listTopAnchorID = "nav-list-top"        // head scroll anchor for the first row
-    @State private var muteHovering = false           // mute button hover (driven by its AppKit catcher)
-    @State private var visualizerMode: VisualizerMode = .spectrum
-    @State private var isScrubbing = false
-    @State private var scrubTime: TimeInterval = 0
-    @State private var seekHoverX: CGFloat?   // cursor x over the position slider
+    @State var selectionIsExplicit = false
+    @State var scrollToSelectionNonce = 0    // bump to scroll to the cursor (keyboard nav only)
+    @State var suppressTopResetOnce = false  // skip the next source-switch scroll restore (goToCurrentTrack centres instead)
+    @State var scrollMemory: [Playlist.ID?: CGFloat] = [:]  // per-source scroll offset, so each source reopens where you left it
+    @State var scrollRestorer = ScrollOffsetRestorer()      // chases a remembered offset across the lazy content swap
+    static let listBottomAnchorID = "nav-list-bottom"  // tail scroll anchor for the last row
+    static let listTopAnchorID = "nav-list-top"        // head scroll anchor for the first row
+    @State var muteHovering = false           // mute button hover (driven by its AppKit catcher)
+    @State var visualizerMode: VisualizerMode = .spectrum
+    @State var isScrubbing = false
+    @State var scrubTime: TimeInterval = 0
+    @State var seekHoverX: CGFloat?   // cursor x over the position slider
     // Gesture-driven reorder, shared by library & queue (ids never collide:
     // library rows key on file path, queue rows on a UUID string).
-    @State private var rowFrames: [String: CGRect] = [:]
-    @State private var draggingID: String?
-    @State private var dragCursorY: CGFloat = 0
+    @State var rowFrames: [String: CGRect] = [:]
+    @State var draggingID: String?
+    @State var dragCursorY: CGFloat = 0
     /// The dragged row's slot frame, snapshotted at drag start — sizes/places the
     /// floating ghost and anchors the shift math even after the lazy stack culls
     /// the row itself.
-    @State private var draggedFrame: CGRect?
+    @State var draggedFrame: CGRect?
     /// Scrolls the list when a reorder drag nears the viewport edge, so long
     /// lists can be reordered past the visible rows.
-    @State private var autoScroller = ReorderAutoScroller()
+    @State var autoScroller = ReorderAutoScroller()
     // Collapsed artist sections (Artist view).
-    @State private var collapsedGroups: Set<String> = []
+    @State var collapsedGroups: Set<String> = []
     // Source switcher: nil = the whole library, otherwise the viewed playlist.
-    @State private var selectedPlaylistID: Playlist.ID?
-    @State private var renamingPlaylist = false
-    @State private var renameText = ""
-    @State private var renameTargetID: Playlist.ID?
-    @State private var showSettings = false
-    @State private var showLyrics = false
-    @State private var searchText = ""
-    @State private var searchActive = false
-    @State private var searchResults: [Track] = []   // filled off-main by the debounced search task
-    @State private var urlChips: [String] = []   // links queued via the ＋ button
-    @State private var shakingChipURL: String?   // chip to shake when a dupe is re-added
-    @State private var isDropTargeted = false
+    @State var selectedPlaylistID: Playlist.ID?
+    @State var renamingPlaylist = false
+    @State var renameText = ""
+    @State var renameTargetID: Playlist.ID?
+    @State var showSettings = false
+    @State var showLyrics = false
+    @State var searchText = ""
+    @State var searchActive = false
+    @State var searchResults: [Track] = []   // filled off-main by the debounced search task
+    @State var urlChips: [String] = []   // links queued via the ＋ button
+    @State var shakingChipURL: String?   // chip to shake when a dupe is re-added
+    @State var isDropTargeted = false
     /// Whether the pointer is over the now-playing title/artist strip — reveals the
     /// "open on YouTube" link there without leaving a button parked at rest.
-    @State private var nowPlayingHover = false
+    @State var nowPlayingHover = false
     /// Decoded once per track (not per frame) so the breathing animation doesn't
     /// re-decode the artwork 30×/sec.
-    @State private var artworkImage: NSImage?
-    @FocusState private var urlFieldFocused: Bool
-    @FocusState private var searchFieldFocused: Bool
-    @FocusState private var renameFieldFocused: Bool
+    @State var artworkImage: NSImage?
+    @FocusState var urlFieldFocused: Bool
+    @FocusState var searchFieldFocused: Bool
+    @FocusState var renameFieldFocused: Bool
 
     /// Accent — the signature green, used sparingly.
-    private let accent = Theme.accent
+    let accent = Theme.accent
 
-    private let contentWidth: CGFloat = 460
-    private let artHeight: CGFloat = 340
+    let contentWidth: CGFloat = 460
+    let artHeight: CGFloat = 340
 
-    private var engine: AudioEngine { controller.engine }
+    var engine: AudioEngine { controller.engine }
 
     var body: some View {
         Group {
@@ -262,7 +262,7 @@ struct PlayerWindow: View {
     /// Fullscreen reuses every normal control — nothing is lost. It just lays the
     /// player out in two columns (now-playing on the left, library/queue on the
     /// right) over a blurred-artwork backdrop, with a larger visualizer.
-    private var fullscreenContent: some View {
+    var fullscreenContent: some View {
         GeometryReader { geo in
             // Scale the cover and the list to the actual screen so it truly fills,
             // and center the two columns so there's no top-left void.
@@ -395,7 +395,7 @@ struct PlayerWindow: View {
 
     // MARK: Now-playing info
 
-    private var infoStrip: some View {
+    var infoStrip: some View {
         let track = controller.currentTrack
         let hasArtist = !(track?.artist.isEmpty ?? true)
         return VStack(alignment: .leading, spacing: 3) {
@@ -455,7 +455,7 @@ struct PlayerWindow: View {
         }
     }
 
-    private var visualizerStrip: some View {
+    var visualizerStrip: some View {
         VisualizerView(engine: engine, mode: $visualizerMode, theme: controller.theme,
                        rows: isFullscreen ? 22 : 16, columnScale: isFullscreen ? 2 : 1,
                        transparentBackground: isFullscreen)
@@ -465,7 +465,7 @@ struct PlayerWindow: View {
 
     // MARK: Position slider
 
-    private var positionSlider: some View {
+    var positionSlider: some View {
         WaveformSeekBar(clock: engine.clock, waveforms: controller.waveforms,
                         engine: engine, accent: accent,
                         isScrubbing: $isScrubbing, scrubTime: $scrubTime, seekHoverX: $seekHoverX)
@@ -473,7 +473,7 @@ struct PlayerWindow: View {
 
     // MARK: Transport
 
-    private var transportRow: some View {
+    var transportRow: some View {
         // Spotify-style: plain icons, one big Play, shuffle/repeat inline, centered.
         HStack(spacing: 20) {
             Spacer(minLength: 0)
@@ -539,7 +539,7 @@ struct PlayerWindow: View {
 
     // MARK: Utility row (open file + volume — de-emphasized)
 
-    private var utilityRow: some View {
+    var utilityRow: some View {
         HStack(spacing: 8) {
             iconButton("folder", size: 13, help: "Open file") { openFile() }
             Spacer()
@@ -574,7 +574,7 @@ struct PlayerWindow: View {
 
     /// The cover slot: artwork (or the Settings panel), with the settings toggle
     /// and sleep badge floating over its top corners — no separate top bar needed.
-    private func heroSlot(width: CGFloat, height: CGFloat) -> some View {
+    func heroSlot(width: CGFloat, height: CGFloat) -> some View {
         ZStack(alignment: .top) {
             if showSettings {
                 SettingsView(controller: controller, width: width, height: height)
@@ -655,12 +655,12 @@ struct PlayerWindow: View {
     // MARK: Library section (header with expandable search + track list)
 
     /// Normal window: fixed-height list.
-    private var librarySection: some View { libraryCard(list: trackScroll(fixedHeight: 168)) }
+    var librarySection: some View { libraryCard(list: trackScroll(fixedHeight: 168)) }
 
     /// Fullscreen: the card fills an exact height (matched to the left column), the
     /// list stretches to fill it, and it stays transparent so it blends into the
     /// dark backdrop instead of reading as a lighter panel.
-    private func fullscreenLibrary(height: CGFloat) -> some View {
+    func fullscreenLibrary(height: CGFloat) -> some View {
         libraryCard(list: trackScroll(fixedHeight: nil), plain: true).frame(height: height)
     }
 
@@ -774,7 +774,7 @@ struct PlayerWindow: View {
     /// The tracks the list currently shows, in on-screen order — what ↑/↓ walks.
     /// Mirrors the render: a selected playlist, the collapsible artist sections
     /// (skipping collapsed groups), or the flat/filtered library.
-    private var navigableTracks: [Track] {
+    var navigableTracks: [Track] {
         if selectedPlaylist != nil { return playlistTracks }
         if controller.library.view == .artist && searchText.isEmpty {
             return artistSections.flatMap { collapsedGroups.contains($0.id) ? [] : $0.tracks }
@@ -784,7 +784,7 @@ struct PlayerWindow: View {
 
     /// Move the keyboard cursor by `delta`, seeding at the playing row (if shown)
     /// or an end when nothing is selected yet.
-    private func moveSelection(by delta: Int) {
+    func moveSelection(by delta: Int) {
         let tracks = navigableTracks
         guard !tracks.isEmpty else { return }
         let index: Int
@@ -804,7 +804,7 @@ struct PlayerWindow: View {
     }
 
     /// Play the row under the cursor, in the scope matching the current source.
-    private func playSelectedTrack() {
+    func playSelectedTrack() {
         guard let id = selectedTrackID,
               let track = navigableTracks.first(where: { $0.id == id }) else { return }
         if selectedPlaylist != nil {
@@ -828,7 +828,7 @@ struct PlayerWindow: View {
     /// (no playback), ⇧ selects the range from the anchor to the clicked row, and
     /// a plain click plays it (collapsing the selection to just that row). Keeps the
     /// Winamp-style click-to-play while layering standard macOS multi-select on top.
-    private func handleRowTap(_ track: Track, in scope: [Track]?) {
+    func handleRowTap(_ track: Track, in scope: [Track]?) {
         let mods = NSEvent.modifierFlags
         if mods.contains(.command) {
             if !selectionIsExplicit {
@@ -881,7 +881,7 @@ struct PlayerWindow: View {
     }
 
     /// Select every track in the current view (⌘A).
-    private func selectAll() {
+    func selectAll() {
         let tracks = navigableTracks
         guard !tracks.isEmpty else { return }
         selection = Set(tracks.map { $0.id })
@@ -889,7 +889,7 @@ struct PlayerWindow: View {
     }
 
     /// Delete the whole selection through the failure-aware bulk path, then clear.
-    private func deleteSelection() {
+    func deleteSelection() {
         let tracks = selectedTracks
         guard !tracks.isEmpty else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -901,7 +901,7 @@ struct PlayerWindow: View {
     /// The bulk context menu for a row, or nil unless the row is part of a
     /// multi-selection (more than one row selected and this row among them).
     /// `playlist` non-nil adds a "Remove from Playlist" bulk action.
-    private func bulkRowMenu(for track: Track, inPlaylist playlist: Playlist? = nil) -> BulkRowMenu? {
+    func bulkRowMenu(for track: Track, inPlaylist playlist: Playlist? = nil) -> BulkRowMenu? {
         guard selection.contains(track.id), selection.count > 1 else { return nil }
         let tracks = selectedTracks
         let favs = tracks.map { controller.favorites.isFavorite($0.url.path) }
@@ -938,7 +938,7 @@ struct PlayerWindow: View {
 
     /// Floating bar of bulk actions, shown while 2+ rows are selected. Mirrors the
     /// right-click bulk menu as visible, one-tap buttons pinned to the card's bottom.
-    @ViewBuilder private var selectionBar: some View {
+    @ViewBuilder var selectionBar: some View {
         if selection.count >= 2 {
             let tracks = selectedTracks
             let allFavorited = tracks.allSatisfy { controller.favorites.isFavorite($0.url.path) }
@@ -1061,14 +1061,14 @@ struct PlayerWindow: View {
 
     /// Currently viewed playlist, or nil while the whole library is shown. Falls
     /// back to nil if the selected playlist was deleted.
-    private var selectedPlaylist: Playlist? {
+    var selectedPlaylist: Playlist? {
         guard let id = selectedPlaylistID else { return nil }
         return controller.playlists.playlists.first { $0.id == id }
     }
 
     /// The selected playlist's tracks resolved against the library (order kept,
     /// missing files dropped).
-    private var playlistTracks: [Track] {
+    var playlistTracks: [Track] {
         guard let playlist = selectedPlaylist else { return [] }
         return controller.tracks(in: playlist)
     }
@@ -1080,7 +1080,7 @@ struct PlayerWindow: View {
     /// row) can't tell "scrolled off-screen" from "not in this list" — both render
     /// no marker, both read as not-visible — so without this check the pill stuck
     /// on forever in any playlist that didn't contain the playing track.
-    private var currentTrackInSource: Bool {
+    var currentTrackInSource: Bool {
         guard let current = controller.currentTrack else { return false }
         // Library reaches every played track (playback scope is the library), and
         // goToCurrentTrack clears any search/favorites filter before scrolling.
@@ -1231,21 +1231,21 @@ struct PlayerWindow: View {
     /// (the ＋ button / Save-queue), switch to it and start inline-naming it right
     /// away; when false (library's "New Playlist…"), create it quietly with its
     /// default name and stay put.
-    private func createPlaylist(addingTrack track: Track? = nil, select: Bool = true) {
+    func createPlaylist(addingTrack track: Track? = nil, select: Bool = true) {
         let playlist = controller.playlists.create()
         if let track { _ = controller.playlists.add(path: track.url.path, to: playlist.id) }
         if select { beginRename(id: playlist.id, current: playlist.name) }
     }
 
     /// Create a playlist seeded with several tracks (multi-select "New Playlist…").
-    private func createPlaylist(addingTracks tracks: [Track], select: Bool = true) {
+    func createPlaylist(addingTracks tracks: [Track], select: Bool = true) {
         let playlist = controller.playlists.create()
         for track in tracks { _ = controller.playlists.add(path: track.url.path, to: playlist.id) }
         if select { beginRename(id: playlist.id, current: playlist.name) }
     }
 
     /// Switch to a playlist and turn its header name into a focused text field.
-    private func beginRename(id: Playlist.ID, current: String) {
+    func beginRename(id: Playlist.ID, current: String) {
         selectSource(id)
         renameTargetID = id
         renameText = current
@@ -1273,7 +1273,7 @@ struct PlayerWindow: View {
     }
 
     /// Add-to-playlist submenu entries for a library row.
-    private func playlistMenuItems(for track: Track) -> [PlaylistMenuItem] {
+    func playlistMenuItems(for track: Track) -> [PlaylistMenuItem] {
         let path = track.url.path
         return controller.playlists.playlists.map { playlist in
             PlaylistMenuItem(id: playlist.id, name: playlist.name,
@@ -1322,7 +1322,7 @@ struct PlayerWindow: View {
         .padding(.vertical, 2)
     }
 
-    private func trackScroll(fixedHeight: CGFloat?) -> some View {
+    func trackScroll(fixedHeight: CGFloat?) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -1753,7 +1753,7 @@ struct PlayerWindow: View {
     /// (alphabetical, tracks in track-number order), and all single-track artists
     /// are gathered into one "Various" section at the end — so a diverse library
     /// isn't a wall of one-line headers.
-    private var artistSections: [LibrarySection] {
+    var artistSections: [LibrarySection] {
         let groups = Dictionary(grouping: filteredTracks) { $0.artist.isEmpty ? "Unknown Artist" : $0.artist }
         var sections: [LibrarySection] = []
         var singles: [Track] = []
@@ -1830,7 +1830,7 @@ struct PlayerWindow: View {
 
     /// Whether the active drag is a queue item (queue rows key on UUID strings,
     /// list rows on file paths).
-    private var dragIsQueueItem: Bool {
+    var dragIsQueueItem: Bool {
         draggingID.flatMap { UUID(uuidString: $0) } != nil
     }
 
@@ -1839,7 +1839,7 @@ struct PlayerWindow: View {
     /// ReorderDragModifier) and the single model move lands on drop. Reordering
     /// the model live fed the shifting row frames straight back into the
     /// insertion math, which twitched the rows.
-    private func handleReorderDrag(id: String, cursorY: CGFloat, onEnd: @escaping () -> Void) {
+    func handleReorderDrag(id: String, cursorY: CGFloat, onEnd: @escaping () -> Void) {
         if draggingID != id { draggingID = id }
         dragCursorY = cursorY
         // Snapshot the slot frame once per drag (frames arrive a pass after
@@ -1886,7 +1886,7 @@ struct PlayerWindow: View {
 
     /// Drop: move the dragged track to the slot the cursor is over and persist.
     /// (Manual view only.)
-    private func finishLibraryReorder(path: String) {
+    func finishLibraryReorder(path: String) {
         // The event monitor's mouse-up and the gesture's onEnded can both land
         // here; the first one clears draggingID and the second is a no-op.
         guard draggingID == path else { return }
@@ -1904,7 +1904,7 @@ struct PlayerWindow: View {
     }
 
     /// Drop within a playlist — same math against the playlist's rows.
-    private func finishPlaylistReorder(path: String, in playlist: Playlist) {
+    func finishPlaylistReorder(path: String, in playlist: Playlist) {
         guard draggingID == path else { return }
         autoScroller.stop()
         withAnimation(.easeInOut(duration: 0.18)) {
@@ -1920,7 +1920,7 @@ struct PlayerWindow: View {
     }
 
     /// Drop within the queue.
-    private func finishQueueReorder(id: String) {
+    func finishQueueReorder(id: String) {
         guard draggingID == id else { return }
         autoScroller.stop()
         withAnimation(.easeInOut(duration: 0.18)) {
@@ -1979,7 +1979,7 @@ struct PlayerWindow: View {
     }
 
     /// Both transient toasts, stacked at the bottom of the window.
-    @ViewBuilder private var bottomToasts: some View {
+    @ViewBuilder var bottomToasts: some View {
         VStack(spacing: 8) {
             noticeToast
             errorToast
@@ -1990,7 +1990,7 @@ struct PlayerWindow: View {
 
     // MARK: Download bar (YouTube URL → mp3)
 
-    private var downloadBar: some View {
+    var downloadBar: some View {
         let downloading = controller.downloadsLeft > 0
         return VStack(spacing: 6) {
             HStack(spacing: 8) {
@@ -2292,7 +2292,7 @@ struct PlayerWindow: View {
     /// The list the library section renders. Empty query → the whole library
     /// (cheap, always fresh). Otherwise the precomputed `searchResults`, filled
     /// by the debounced, off-main task — never fuzzy-ranked inside `body`.
-    private var filteredTracks: [Track] {
+    var filteredTracks: [Track] {
         let base = searchText.trimmingCharacters(in: .whitespaces).isEmpty
             ? controller.library.tracks
             : searchResults
@@ -2303,7 +2303,7 @@ struct PlayerWindow: View {
     /// The scope a library tap plays in. With the favorites filter on, playback
     /// walks the visible favorites (so next/previous stay within them); otherwise
     /// nil lets `play()` default to the whole library.
-    private var libraryPlaybackScope: [Track]? {
+    var libraryPlaybackScope: [Track]? {
         controller.favorites.filterActive ? filteredTracks : nil
     }
 
@@ -2322,7 +2322,7 @@ struct PlayerWindow: View {
 
     // MARK: Drag & drop
 
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+    func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         let urlProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
         if !urlProviders.isEmpty {
             Task { @MainActor in
@@ -2374,7 +2374,7 @@ struct PlayerWindow: View {
     }
 
     /// Drop the cursor from any text field (Esc / click outside).
-    private func dismissFocus() {
+    func dismissFocus() {
         urlFieldFocused = false
         searchFieldFocused = false
     }
