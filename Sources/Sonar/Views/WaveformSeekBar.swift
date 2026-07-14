@@ -181,3 +181,20 @@ private final class BarsCache {
         self.height = height
     }
 }
+
+/// The "00:34 / 03:12" readout. Observes the clock so only this label — not the
+/// whole window — re-renders as the position ticks.
+struct SeekTimeLabel: View {
+    @ObservedObject var clock: PlaybackClock
+    let isScrubbing: Bool
+    let scrubTime: TimeInterval
+    let accent: Color
+
+    var body: some View {
+        Text(clockTimeString(isScrubbing ? scrubTime : clock.currentTime)
+             + " / " + clockTimeString(clock.duration))
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(accent)
+            .fixedSize()
+    }
+}

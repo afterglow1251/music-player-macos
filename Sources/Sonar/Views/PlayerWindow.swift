@@ -591,7 +591,7 @@ struct PlayerWindow: View {
                 // shows its own countdown), and over Lyrics it covers the words.
                 if !showSettings && !showLyrics {
                     if let remaining = controller.sleepRemaining {
-                        sleepBadge(timeString(remaining))
+                        sleepBadge(clockTimeString(remaining))
                     } else if controller.sleepMode == .endOfTrack {
                         sleepBadge("track end")
                     }
@@ -1606,7 +1606,7 @@ struct PlayerWindow: View {
                              isPlaying: engine.isPlaying,
                              isSelected: false,
                              selectionIsExplicit: false,
-                             durationText: timeString(track.duration),
+                             durationText: clockTimeString(track.duration),
                              onTap: {},
                              onPlayNext: {},
                              onAddToQueue: {},
@@ -1629,7 +1629,7 @@ struct PlayerWindow: View {
             isPlaying: engine.isPlaying,
             isSelected: selection.contains(track.id),
             selectionIsExplicit: selectionIsExplicit,
-            durationText: timeString(track.duration),
+            durationText: clockTimeString(track.duration),
             onTap: { handleRowTap(track, in: libraryPlaybackScope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
@@ -1669,7 +1669,7 @@ struct PlayerWindow: View {
             isPlaying: engine.isPlaying,
             isSelected: selection.contains(track.id),
             selectionIsExplicit: selectionIsExplicit,
-            durationText: timeString(track.duration),
+            durationText: clockTimeString(track.duration),
             onTap: { handleRowTap(track, in: scope) },
             onPlayNext: { withAnimation(.easeInOut(duration: 0.2)) { controller.playNext(track) } },
             onAddToQueue: { withAnimation(.easeInOut(duration: 0.2)) { controller.addToQueue(track) } },
@@ -2383,22 +2383,4 @@ struct PlayerWindow: View {
         artworkImage = track?.artworkData.flatMap { NSImage(data: $0) }
     }
 
-    private func timeString(_ t: TimeInterval) -> String { clockTimeString(t) }
-}
-
-/// The "00:34 / 03:12" readout. Observes the clock so only this label — not the
-/// whole window — re-renders as the position ticks.
-private struct SeekTimeLabel: View {
-    @ObservedObject var clock: PlaybackClock
-    let isScrubbing: Bool
-    let scrubTime: TimeInterval
-    let accent: Color
-
-    var body: some View {
-        Text(clockTimeString(isScrubbing ? scrubTime : clock.currentTime)
-             + " / " + clockTimeString(clock.duration))
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .foregroundStyle(accent)
-            .fixedSize()
-    }
 }
