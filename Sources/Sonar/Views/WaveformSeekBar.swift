@@ -1,12 +1,5 @@
 import SwiftUI
 
-/// "00:34"-style clock readout used by the seek bars and time labels.
-func clockTimeString(_ t: TimeInterval) -> String {
-    guard t.isFinite, t >= 0 else { return "00:00" }
-    let total = Int(t)
-    return String(format: "%02d:%02d", total / 60, total % 60)
-}
-
 /// The position bar, drawn as the track's real waveform. Observes the clock for
 /// the live position and the waveform store for the peaks; scrub/hover state is
 /// bound back to the parent. Isolated so ticking doesn't re-render the rest of the

@@ -44,7 +44,7 @@ struct SettingsView: View {
             HStack(spacing: 6) {
                 sectionTitle("SLEEP TIMER")
                 if let remaining = controller.sleepRemaining {
-                    Text(timeString(remaining))
+                    Text(clockTimeString(remaining))
                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .foregroundStyle(accent)
                 } else if controller.sleepMode == .endOfTrack {
@@ -207,8 +207,4 @@ struct SettingsView: View {
         }
     }
 
-    private func timeString(_ t: TimeInterval) -> String {
-        let total = Int(t)
-        return String(format: "%02d:%02d", total / 60, total % 60)
-    }
 }

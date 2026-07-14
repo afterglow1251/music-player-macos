@@ -433,9 +433,9 @@ private struct MiniPlayerView: View {
                             seekHoverX: $seekHoverX,
                             height: 20, muted: .primary.opacity(0.25))
             HStack {
-                Text(Self.time(clock.currentTime)).font(.system(size: 9, design: .monospaced))
+                Text(clockTimeString(clock.currentTime, padMinutes: false)).font(.system(size: 9, design: .monospaced))
                 Spacer()
-                Text(Self.time(clock.duration)).font(.system(size: 9, design: .monospaced))
+                Text(clockTimeString(clock.duration, padMinutes: false)).font(.system(size: 9, design: .monospaced))
             }
             .foregroundStyle(.secondary)
         }
@@ -459,11 +459,6 @@ private struct MiniPlayerView: View {
         }
     }
 
-    private static func time(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let total = Int(seconds)
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
 }
 
 /// A native visual-effect view (`NSVisualEffectView`) bridged for SwiftUI.
