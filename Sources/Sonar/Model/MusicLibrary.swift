@@ -17,6 +17,14 @@ final class MusicLibrary: ObservableObject {
     private let prefs = Preferences()
     private static let audioExtensions: Set<String> = ["mp3", "m4a", "wav", "aiff", "aif", "flac"]
 
+    /// Clips shorter than this are treated as non-music — beeps, sound effects,
+    /// stray system sounds — and kept out of the library entirely. Besides being
+    /// noise, a sub-second file loops / auto-advances many times a second and can
+    /// hang the player, so the cleanest fix is to never let them in. No real
+    /// track is this short. (A file whose duration can't be read reports 0 and is
+    /// dropped too — it wouldn't play properly anyway.)
+    static let minimumTrackDuration: TimeInterval = 5
+
     // Folder watcher.
     private var watcher: DispatchSourceFileSystemObject?
     private var watchedFD: Int32 = -1
@@ -58,7 +66,11 @@ final class MusicLibrary: ObservableObject {
 
         var loaded: [Track] = []
         for url in audioURLs {
-            loaded.append(await Track.load(from: url))
+            let track = await Track.load(from: url)
+            // Keep beeps / sound effects / stray clips out of the library — they
+            // don't belong and, being sub-second, can hang playback on repeat.
+            guard track.duration >= Self.minimumTrackDuration else { continue }
+            loaded.append(track)
         }
         tracks = arranged(loaded)
     }
