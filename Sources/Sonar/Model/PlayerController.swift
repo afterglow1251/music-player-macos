@@ -506,6 +506,13 @@ final class PlayerController: ObservableObject {
         return library.tracks.contains { $0.videoID == id }
     }
 
+    /// Is this exact URL already sitting in the download queue (submitted, waiting
+    /// or mid-download)? The staging UI combines this with its own not-yet-submitted
+    /// chips to decide "shake the existing chip" vs "stage a new one".
+    func isQueued(_ url: String) -> Bool {
+        downloadQueue.contains { $0.url == url }
+    }
+
     private func processDownloads() {
         guard !isProcessingDownloads, let next = downloadQueue.first else { return }
         isProcessingDownloads = true

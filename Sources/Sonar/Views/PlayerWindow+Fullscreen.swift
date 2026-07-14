@@ -24,7 +24,7 @@ extension PlayerWindow {
                         positionSlider
                         transportRow
                         utilityRow
-                        downloadBar
+                        DownloadBar(controller: controller, urlChips: $urlChips, shakingChipURL: $shakingChipURL, urlFieldFocused: $urlFieldFocused)
                     }
                     .frame(width: artSize)
                     // Measure the left column so the library can match its height exactly.

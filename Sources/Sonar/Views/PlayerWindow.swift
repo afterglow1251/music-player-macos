@@ -182,7 +182,7 @@ struct PlayerWindow: View {
             positionSlider
             transportRow
             utilityRow
-            downloadBar
+            DownloadBar(controller: controller, urlChips: $urlChips, shakingChipURL: $shakingChipURL, urlFieldFocused: $urlFieldFocused)
             librarySection
         }
         .padding(16)
