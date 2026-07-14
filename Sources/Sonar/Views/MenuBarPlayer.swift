@@ -211,7 +211,26 @@ final class MenuBarController {
 
     private func refreshWindowVisibility() {
         let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "player" })
-        windowVisibility.isFrontmost = NSApp.isActive && (window?.isKeyWindow ?? false)
+        windowVisibility.isFrontmost = NSApp.isActive && (window.map(Self.isFrontOrdinaryWindow) ?? false)
+    }
+
+    /// Whether `window` is the front-most ordinary window on screen — i.e. no
+    /// other normal-level Sonar window sits in front of it.
+    ///
+    /// Uses window *ordering*, NOT `isKeyWindow`, on purpose. Any tracking menu
+    /// — including another app's menu-bar-extra menu (e.g. Postgres's) — makes
+    /// the current key window momentarily resign key while the menu is open,
+    /// then become key again when it closes. Keying "is the main window
+    /// frontmost" off that flickered while such a menu opened just before the
+    /// panel: the panel appeared with the "show main window" button on (main
+    /// window "not frontmost"), then the button vanished a beat later when the
+    /// window re-became key. Window ordering never flickers for a menu, so this
+    /// stays steady across the whole open. The status panel itself is at
+    /// `.popUpMenu` level, so filtering to `.normal` windows excludes it.
+    private static func isFrontOrdinaryWindow(_ window: NSWindow) -> Bool {
+        guard window.isVisible, !window.isMiniaturized else { return false }
+        let ordinary = NSApp.orderedWindows.filter { $0.isVisible && $0.level == .normal }
+        return ordinary.first === window
     }
 
     private static let titleWidth: CGFloat = 160
@@ -267,6 +286,10 @@ final class MenuBarController {
         if panel.isVisible {
             dismiss()
         } else {
+            // Compute the "show main window" button's visibility from the live
+            // window state right now, so the panel's first frame is already
+            // correct instead of inheriting whatever the last notification left.
+            refreshWindowVisibility()
             panel.contentViewController = makeHosting()
             // Size the panel to its SwiftUI content BEFORE positioning. On the
             // first open the content hasn't laid out yet, so the panel still
