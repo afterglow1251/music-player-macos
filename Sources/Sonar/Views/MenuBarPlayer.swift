@@ -237,14 +237,23 @@ final class MenuBarController {
 
     private func refreshButton() {
         guard let button = statusItem.button else { return }
+        // Icon only. Showing the track title made the item ~160px wide, so on a
+        // crowded menu bar (many extras + the notch) macOS couldn't fit it and
+        // hid the whole thing — losing even the icon. A plain icon always fits.
         button.image = Self.icon
-        if let track = controller.currentTrack {
-            statusItem.length = Self.titleWidth
-            button.attributedTitle = Self.title(track.displayTitle)
-        } else {
-            statusItem.length = NSStatusItem.variableLength
-            button.title = ""
-        }
+        statusItem.length = NSStatusItem.variableLength
+        button.title = ""
+
+        // TODO: DO NOT DELETE — original title-in-the-menu-bar behavior, kept for
+        // when we implement a proper "show title only while it fits" fallback.
+        // if let track = controller.currentTrack {
+        //     statusItem.length = Self.titleWidth
+        //     button.attributedTitle = Self.title(track.displayTitle)
+        // } else {
+        //     statusItem.length = NSStatusItem.variableLength
+        //     button.title = ""
+        // }
+
         // Redrawing the button (icon/title) can drop the highlight, so re-assert
         // the open-state indication every refresh.
         setOpenIndication(isPanelOpen)
