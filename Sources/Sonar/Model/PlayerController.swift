@@ -46,6 +46,12 @@ final class PlayerController: ObservableObject {
             if currentTrack?.artworkData != oldValue?.artworkData { refreshAlbumTheme() }
         }
     }
+    /// Which browse source the *currently loaded* track is playing from — nil for
+    /// the library, else a playlist's id. Distinct from whatever source the user
+    /// is browsing right now: start a playlist, scroll away to another, and this
+    /// still points at the one that's actually playing, so the UI can mark it.
+    /// Set only on user-initiated plays; auto next/previous keep the same source.
+    @Published private(set) var playingSourceID: Playlist.ID?
     @Published var urlInput: String = ""
 
     /// Tracks the user lined up to play next, overriding the normal library order.
@@ -211,10 +217,24 @@ final class PlayerController: ObservableObject {
         save()
     }
 
+    /// A user-initiated play from a known browse source, which records that
+    /// source (nil = library) for the UI. The plain `play(_:in:)` above is left
+    /// for auto next/previous, which must NOT change the playing source.
+    func play(_ track: Track, from source: Playlist.ID?, in scope: [Track]?) {
+        playingSourceID = source
+        play(track, in: scope)
+    }
+
     /// Play a whole group (playlist / artist section) as the new scope.
     func playGroup(_ tracks: [Track]) {
         guard let first = tracks.first else { return }
         play(first, in: tracks)
+    }
+
+    /// Play a whole group as a user-initiated action, recording its source.
+    func playGroup(_ tracks: [Track], from source: Playlist.ID?) {
+        playingSourceID = source
+        playGroup(tracks)
     }
 
     /// Play/pause. If nothing is loaded yet, start the first track in the library.
@@ -372,7 +392,7 @@ final class PlayerController: ObservableObject {
 
     /// Play a playlist from its first track, as the new scope.
     func playPlaylist(_ playlist: Playlist) {
-        playGroup(tracks(in: playlist))
+        playGroup(tracks(in: playlist), from: playlist.id)
     }
 
     /// Snapshot the current queue into a new playlist. Returns nil if the queue

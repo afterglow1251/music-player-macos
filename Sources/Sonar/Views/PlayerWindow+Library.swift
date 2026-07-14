@@ -174,10 +174,12 @@ extension PlayerWindow {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 sourcePill(title: "Library", systemImage: "music.note",
-                           selected: selectedPlaylistID == nil) { selectSource(nil) }
+                           selected: selectedPlaylistID == nil,
+                           playing: controller.currentTrack != nil && controller.playingSourceID == nil) { selectSource(nil) }
                 ForEach(controller.playlists.playlists) { playlist in
                     sourcePill(title: playlist.name, systemImage: "music.note.list",
-                               selected: selectedPlaylistID == playlist.id) { selectSource(playlist.id) }
+                               selected: selectedPlaylistID == playlist.id,
+                               playing: controller.playingSourceID == playlist.id) { selectSource(playlist.id) }
                         .contextMenu {
                             Button("Play") { controller.playPlaylist(playlist) }
                             Button("Rename") { beginRename(id: playlist.id, current: playlist.name) }
@@ -205,21 +207,28 @@ extension PlayerWindow {
         .scrollIndicators(.never)
     }
 
+    /// A source tab. Three visual states, all by recolouring the one capsule:
+    /// `selected` (the source you're browsing) is a solid green-accent fill;
+    /// `playing` but not selected (the source actually playing, while you browse
+    /// elsewhere) is a solid logo-magenta fill, just as vivid as the green;
+    /// otherwise it's the neutral grey. Selection wins when a source is both.
     private func sourcePill(title: String, systemImage: String, selected: Bool,
-                            action: @escaping () -> Void) -> some View {
+                            playing: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage).font(.system(size: 9))
                 Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1)
             }
-            .foregroundStyle(selected ? .black : .white.opacity(0.7))
+            .foregroundStyle(selected ? .black : (playing ? .white : .white.opacity(0.7)))
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Capsule().fill(selected ? accent.opacity(0.9) : Color.white.opacity(0.08)))
+            .background(Capsule().fill(
+                selected ? accent.opacity(0.9) : (playing ? Theme.logo : Color.white.opacity(0.08))))
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
-        // Animate only the highlight color, not a layout morph — keeps switching crisp.
+        // Animate only the highlight colour, not a layout morph — keeps switching crisp.
         .animation(.easeInOut(duration: 0.18), value: selected)
+        .animation(.easeInOut(duration: 0.18), value: playing)
     }
 
     /// Header shown in place of the LIBRARY header while viewing a playlist.

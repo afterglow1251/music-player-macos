@@ -443,7 +443,7 @@ extension PlayerWindow {
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.3))
             Spacer()
-            Button { controller.playGroup(section.tracks) } label: {
+            Button { controller.playGroup(section.tracks, from: nil) } label: {
                 Image(systemName: "play.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(accent)

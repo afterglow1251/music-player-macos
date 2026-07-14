@@ -9,4 +9,9 @@ enum Theme {
     /// The favorite/like accent — a warm rose for heart marks, kept distinct from
     /// the green accent so a favorited track reads instantly.
     static let favorite = Color(red: 1.0, green: 0.35, blue: 0.45)
+
+    /// The logo's magenta (the foot of the app-icon bars' gradient). Marks the
+    /// source that's currently playing — kept distinct from the green accent
+    /// (the source you're browsing) and the rose favorite.
+    static let logo = Color(red: 0.83, green: 0.16, blue: 0.74)
 }

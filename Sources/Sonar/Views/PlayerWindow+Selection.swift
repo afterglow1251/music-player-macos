@@ -28,9 +28,9 @@ extension PlayerWindow {
         guard let id = trackSelection.selectedTrackID,
               let track = navigableTracks.first(where: { $0.id == id }) else { return }
         if selectedPlaylist != nil {
-            controller.play(track, in: playlistTracks)
+            controller.play(track, from: selectedPlaylistID, in: playlistTracks)
         } else {
-            controller.play(track, in: libraryPlaybackScope)
+            controller.play(track, from: nil, in: libraryPlaybackScope)
         }
     }
 
@@ -38,7 +38,8 @@ extension PlayerWindow {
     /// continue from there. Also collapses any multi-selection to this one row.
     private func selectAndPlay(_ track: Track, in scope: [Track]?) {
         trackSelection.pickForPlayback(track)
-        controller.play(track, in: scope)
+        // A row click plays from whatever source is on screen (nil = library).
+        controller.play(track, from: selectedPlaylistID, in: scope)
     }
 
     /// Route a row click by modifier: ⌘ toggles the row in/out of the selection
