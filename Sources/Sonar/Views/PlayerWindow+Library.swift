@@ -207,22 +207,23 @@ extension PlayerWindow {
         .scrollIndicators(.never)
     }
 
-    /// A source tab. Three visual states, all by recolouring the one capsule:
-    /// `selected` (the source you're browsing) is a solid green-accent fill;
-    /// `playing` but not selected (the source actually playing, while you browse
-    /// elsewhere) is a solid logo-magenta fill, just as vivid as the green;
-    /// otherwise it's the neutral grey. Selection wins when a source is both.
+    /// A source tab. `selected` (the source you're browsing) is a solid green
+    /// fill. The source actually playing is marked by recolouring its note glyph
+    /// logo-magenta — the same quiet "recolour the icon" language favourites
+    /// already use (pink ♪), so the two vivid fills don't fight. The playing
+    /// glyph stays magenta even on the selected (green) pill, so which source is
+    /// live reads at a glance no matter which one you're browsing.
     private func sourcePill(title: String, systemImage: String, selected: Bool,
                             playing: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage).font(.system(size: 9))
+                    .foregroundStyle(playing ? Theme.logo : (selected ? .black : .white.opacity(0.7)))
                 Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1)
+                    .foregroundStyle(selected ? .black : .white.opacity(0.7))
             }
-            .foregroundStyle(selected ? .black : (playing ? .white : .white.opacity(0.7)))
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Capsule().fill(
-                selected ? accent.opacity(0.9) : (playing ? Theme.logo : Color.white.opacity(0.08))))
+            .background(Capsule().fill(selected ? accent.opacity(0.9) : Color.white.opacity(0.08)))
             .contentShape(Capsule())
         }
         .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
