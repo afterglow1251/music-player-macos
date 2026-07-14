@@ -370,12 +370,7 @@ private struct MiniPlayerView: View {
         }
         .padding(12)
         .frame(width: 268)
-        .background(VisualEffect(material: .menu))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
-        )
+        .modifier(PanelSurface())
         .tint(accent)
     }
 
@@ -478,7 +473,40 @@ private struct MiniTimeLabels: View {
     }
 }
 
-/// A native visual-effect view (`NSVisualEffectView`) bridged for SwiftUI.
+/// The panel's translucent background surface.
+///
+/// On macOS 26+ this is the real Liquid Glass material (`.glassEffect`) — the
+/// same surface native menus adopt on Tahoe, so the panel reads as glass with
+/// specular edges instead of the flat legacy vibrancy. `NSVisualEffectView`
+/// deliberately did NOT become Liquid Glass on Tahoe (Apple kept it as-is for
+/// compatibility), so we can't get the new look just by keeping the `.menu`
+/// material — glass is a separate opt-in API.
+///
+/// On earlier macOS the glass API doesn't exist, so we fall back to the
+/// behind-window `.menu` vibrancy with a hairline edge to fake the boundary the
+/// glass draws for itself.
+private struct PanelSurface: ViewModifier {
+    private static let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            // `.glassEffect` renders the glass within `shape` and samples the
+            // desktop/other apps behind the (transparent) panel window, so it
+            // fully replaces the behind-window `NSVisualEffectView`. It also
+            // owns its corner + edge treatment, so no clip or stroke is needed.
+            content.glassEffect(.regular, in: Self.shape)
+        } else {
+            content
+                .background(VisualEffect(material: .menu))
+                .clipShape(Self.shape)
+                .overlay(Self.shape.strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+        }
+    }
+}
+
+/// A native visual-effect view (`NSVisualEffectView`) bridged for SwiftUI —
+/// the pre-Tahoe fallback background (see `PanelSurface`).
 private struct VisualEffect: NSViewRepresentable {
     let material: NSVisualEffectView.Material
     var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
