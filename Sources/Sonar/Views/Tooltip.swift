@@ -122,6 +122,15 @@ private struct TooltipModifier: ViewModifier {
                         .transition(.opacity)
                 }
             }
+            // The tooltip is an overlay on this control, so it shares the
+            // control's z-order among its siblings. In a transport row the
+            // tooltip is wider than the control and spills sideways over the
+            // neighbours — and a neighbour laid out *after* this control (e.g.
+            // the big Play button sitting to the right of "Back 10 seconds")
+            // draws on top, clipping the tooltip. Lift the control above its
+            // siblings while its tooltip shows so the tooltip stays on top.
+            // Only one control is hovered at a time, so nothing competes.
+            .zIndex(show ? 1 : 0)
     }
 
     private func dismiss() {
