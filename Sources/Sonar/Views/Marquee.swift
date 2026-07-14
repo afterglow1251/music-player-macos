@@ -34,7 +34,10 @@ struct MarqueeText: View {
             let overflowing = textWidth > geo.size.width + 1
             Group {
                 if overflowing {
-                    TimelineView(.animation(minimumInterval: nil, paused: paused)) { tl in
+                    // Capped at 30fps like the visualizer/breathing cover — at
+                    // 35 pt/s that's ~1.2 pt a frame, indistinguishable from a
+                    // display-rate scroll at a quarter of the frame work.
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { tl in
                         let period = (textWidth + spacing) / speed
                         let phase = period > 0
                             ? tl.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
