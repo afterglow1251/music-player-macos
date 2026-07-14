@@ -121,6 +121,12 @@ final class AudioEngine: ObservableObject {
     /// Preload the next track this many seconds before the current one ends.
     private let prescheduleLead: TimeInterval = 5
 
+    /// The sample rate / channel count the node graph is currently wired for, so
+    /// `load` can skip re-wiring (and the deadlock-prone reconnect of a running
+    /// engine) when the next track shares the format.
+    private var connectedSampleRate: Double = 0
+    private var connectedChannels: AVAudioChannelCount = 0
+
     /// Supplies the URL that will play next (for gapless preloading), or nil to
     /// let playback stop / fall back to the non-gapless path. Set by the controller.
     var nextURLProvider: (() -> URL?)?
@@ -156,20 +162,32 @@ final class AudioEngine: ObservableObject {
         hardReset()
         do {
             let file = try AVAudioFile(forReading: url)
+            let format = file.processingFormat
             audioFile = file
-            sampleRate = file.processingFormat.sampleRate
+            sampleRate = format.sampleRate
             totalFrames = file.length
             duration = Double(totalFrames) / sampleRate
             seekFrame = 0
             currentTime = 0
             trackTitle = url.deletingPathExtension().lastPathComponent.uppercased()
 
-            // Reconnect the whole chain with the file's format so the EQ passes
-            // audio through correctly (a format mismatch silences the output).
-            engine.disconnectNodeOutput(player)
-            engine.disconnectNodeOutput(eq)
-            engine.connect(player, to: eq, format: file.processingFormat)
-            engine.connect(eq, to: engine.mainMixerNode, format: file.processingFormat)
+            // Rewire player → eq → mixer with the file's format ONLY when that
+            // format actually changes, and then only with the engine stopped.
+            // Reconnecting a *running* AVAudioEngine to a new sample rate (e.g.
+            // 48 kHz → 44.1 kHz) deadlocks the main thread — which is exactly
+            // what hung when switching from a run of 48 kHz tracks to a 44.1 kHz
+            // one. Same-format switches (the common case) skip the rewire, so
+            // they neither stall nor glitch.
+            if format.sampleRate != connectedSampleRate || format.channelCount != connectedChannels {
+                let wasRunning = engine.isRunning
+                if wasRunning { engine.stop() }
+                engine.disconnectNodeOutput(player)
+                engine.disconnectNodeOutput(eq)
+                engine.connect(player, to: eq, format: format)
+                engine.connect(eq, to: engine.mainMixerNode, format: format)
+                connectedSampleRate = format.sampleRate
+                connectedChannels = format.channelCount
+            }
 
             schedule(from: 0)
             if autoplay { play() }
