@@ -9,23 +9,6 @@ final class MainWindowVisibility: ObservableObject {
     @Published var isFrontmost = false
 }
 
-/// An `NSPanel` that always claims key appearance. The panel is deliberately
-/// never made key (see `togglePanel` — becoming key blinks the status-button
-/// highlight), but the AppKit-backed `Slider` then draws its fill in the
-/// inactive gray regardless of `.tint`. NSCell decides active-vs-inactive
-/// drawing by asking the window's key-APPEARANCE accessors — not
-/// `isKeyWindow`, which alone has no effect on the slider. Those accessors
-/// are private, so they're shadowed via matching `@objc` selectors rather
-/// than `override`; all three variants are covered because different NSCell
-/// paths consult different ones (the same trio Firefox's cell-drawing window
-/// overrides, see MOZCellDrawWindow in nsNativeThemeCocoa.mm).
-private final class KeyAppearancePanel: NSPanel {
-    override var isKeyWindow: Bool { true }
-    @objc(hasKeyAppearance) var hasKeyAppearance: Bool { true }
-    @objc(_hasKeyAppearance) var shadowHasKeyAppearance: Bool { true }
-    @objc(_hasActiveAppearance) var shadowHasActiveAppearance: Bool { true }
-}
-
 /// A menu-bar presence for Sonar: a status-bar button that reflects play state and
 /// pops a compact now-playing panel with transport controls — so you can steer
 /// playback without leaving whatever app you're in.
@@ -50,7 +33,13 @@ final class MenuBarController {
     private var frontmostAppAtOpen: pid_t?
 
     private lazy var panel: NSPanel = {
-        let p = KeyAppearancePanel(
+        // A plain `NSPanel` suffices: every control in the panel is custom-drawn
+        // (waveform seek bar, PressButtons), so nothing consults the window's
+        // key-appearance state. Historically this was a `KeyAppearancePanel`
+        // shadowing private appearance accessors — needed only while the seek
+        // control was an AppKit-backed `Slider` that grayed out in a non-key
+        // window.
+        let p = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 268, height: 150),
             styleMask: [.fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
@@ -84,14 +73,6 @@ final class MenuBarController {
                 self?.dismiss()
                 Self.showMainWindow()
             }
-            // The panel is non-activating so it never becomes key, and SwiftUI
-            // then renders its controls in the inactive style — the seek Slider's
-            // fill goes gray instead of accent green. Forcing the control-active
-            // environment makes controls draw as if the window were key. On
-            // macOS 14+ the active style is keyed off `appearsActive`;
-            // `controlActiveState` is kept for the deprecated readers.
-            .environment(\.appearsActive, true)
-            .environment(\.controlActiveState, .key)
         )
         p.contentViewController = hosting
 
@@ -306,8 +287,7 @@ final class MenuBarController {
             panel.orderFrontRegardless()
             // NOTE: deliberately NOT making the panel key. Becoming key triggers a
             // key-window change that redraws the status button mid-click and blinks
-            // its highlight OFF for a frame. The native seek Slider still draws in
-            // its active style because KeyAppearancePanel reports itself as key.
+            // its highlight OFF for a frame.
             isPanelOpen = true
             setOpenIndication(true)
             installClickMonitor()
@@ -373,8 +353,7 @@ private struct MiniPlayerView: View {
     private let accent = Theme.accent
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
-    /// Debounces scroll-driven seeks; see `ScrollSeekDebounce`.
-    @State private var scrollSeek = ScrollSeekDebounce()
+    @State private var seekHoverX: CGFloat?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -443,46 +422,22 @@ private struct MiniPlayerView: View {
 
     private var progress: some View {
         VStack(spacing: 3) {
-            // Native slider, matching the main window's seek bar and the EQ/volume
-            // sliders. `.tint(accent)` keeps the fill green even though the panel is
-            // a non-key window.
-            Slider(
-                value: Binding(
-                    get: { isScrubbing ? scrubTime : clock.currentTime },
-                    set: { scrubTime = $0 }
-                ),
-                in: 0...max(clock.duration, 0.01),
-                onEditingChanged: { editing in
-                    if editing { scrollSeek.cancel() }   // the drag owns the scrub now
-                    isScrubbing = editing
-                    if !editing { engine.seek(to: scrubTime) }
-                }
-            )
-            .controlSize(.mini)
-            .tint(accent)
-            .disabled(clock.duration <= 0)
+            // The same waveform seek bar as the main window, sized down for the
+            // panel. `muted` uses `.primary` (not the main window's white) because
+            // the panel's `.menu` material follows the system appearance — white
+            // bars would vanish on the light material. Scrubbing, hover preview
+            // and scroll-to-seek all come with it.
+            WaveformSeekBar(clock: clock, waveforms: controller.waveforms,
+                            engine: engine, accent: accent,
+                            isScrubbing: $isScrubbing, scrubTime: $scrubTime,
+                            seekHoverX: $seekHoverX,
+                            height: 20, muted: .primary.opacity(0.25))
             HStack {
                 Text(Self.time(clock.currentTime)).font(.system(size: 9, design: .monospaced))
                 Spacer()
                 Text(Self.time(clock.duration)).font(.system(size: 9, design: .monospaced))
             }
             .foregroundStyle(.secondary)
-        }
-        // Scroll (wheel or trackpad) over the whole seek strip — the mini
-        // slider alone is a sliver of a target — to nudge playback ±3s per
-        // detent, same as the main window's seek bar. Each event only moves the
-        // scrub position; the one real seek commits once the gesture goes quiet
-        // — see `ScrollSeekDebounce` for why.
-        .contentShape(Rectangle())
-        .scrollToAdjust { units in
-            guard clock.duration > 0 else { return }
-            let base = isScrubbing ? scrubTime : clock.currentTime
-            scrubTime = min(max(base + units * 3, 0), clock.duration)
-            isScrubbing = true
-            scrollSeek.schedule {
-                engine.seek(to: scrubTime)
-                isScrubbing = false
-            }
         }
     }
 
