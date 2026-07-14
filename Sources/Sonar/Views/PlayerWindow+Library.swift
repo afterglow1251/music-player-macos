@@ -146,6 +146,15 @@ extension PlayerWindow {
         return controller.playlists.playlists.first { $0.id == id }
     }
 
+    /// The display name of the source the current track is playing from, for the
+    /// "Playing from …" label — nil when nothing is loaded (or the source
+    /// playlist was since deleted, leaving nothing meaningful to point at).
+    var playingSourceName: String? {
+        guard controller.currentTrack != nil else { return nil }
+        guard let id = controller.playingSourceID else { return "Library" }
+        return controller.playlists.playlists.first { $0.id == id }?.name
+    }
+
     /// The selected playlist's tracks resolved against the library (order kept,
     /// missing files dropped).
     var playlistTracks: [Track] {
@@ -174,12 +183,10 @@ extension PlayerWindow {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 sourcePill(title: "Library", systemImage: "music.note",
-                           selected: selectedPlaylistID == nil,
-                           playing: controller.currentTrack != nil && controller.playingSourceID == nil) { selectSource(nil) }
+                           selected: selectedPlaylistID == nil) { selectSource(nil) }
                 ForEach(controller.playlists.playlists) { playlist in
                     sourcePill(title: playlist.name, systemImage: "music.note.list",
-                               selected: selectedPlaylistID == playlist.id,
-                               playing: controller.playingSourceID == playlist.id) { selectSource(playlist.id) }
+                               selected: selectedPlaylistID == playlist.id) { selectSource(playlist.id) }
                         .contextMenu {
                             Button("Play") { controller.playPlaylist(playlist) }
                             Button("Rename") { beginRename(id: playlist.id, current: playlist.name) }
@@ -207,21 +214,18 @@ extension PlayerWindow {
         .scrollIndicators(.never)
     }
 
-    /// A source tab. `selected` (the source you're browsing) is a solid green
-    /// fill. The source actually playing is marked by recolouring its note glyph
-    /// logo-magenta — the same quiet "recolour the icon" language favourites
-    /// already use (pink ♪), so the two vivid fills don't fight. The playing
-    /// glyph stays magenta even on the selected (green) pill, so which source is
-    /// live reads at a glance no matter which one you're browsing.
+    /// A source tab: `selected` (the source you're browsing) is a solid green
+    /// fill, everything else neutral grey. Which source is *playing* is shown by
+    /// the "Playing from …" label above the track, not here — the tab row stays
+    /// calm.
     private func sourcePill(title: String, systemImage: String, selected: Bool,
-                            playing: Bool, action: @escaping () -> Void) -> some View {
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage).font(.system(size: 9))
-                    .foregroundStyle(playing ? Theme.logo : (selected ? .black : .white.opacity(0.7)))
                 Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1)
-                    .foregroundStyle(selected ? .black : .white.opacity(0.7))
             }
+            .foregroundStyle(selected ? .black : .white.opacity(0.7))
             .padding(.horizontal, 9).padding(.vertical, 4)
             .background(Capsule().fill(selected ? accent.opacity(0.9) : Color.white.opacity(0.08)))
             .contentShape(Capsule())
@@ -229,7 +233,6 @@ extension PlayerWindow {
         .buttonStyle(PressableButtonStyle(hoverScale: 1.05))
         // Animate only the highlight colour, not a layout morph — keeps switching crisp.
         .animation(.easeInOut(duration: 0.18), value: selected)
-        .animation(.easeInOut(duration: 0.18), value: playing)
     }
 
     /// Header shown in place of the LIBRARY header while viewing a playlist.
@@ -294,7 +297,7 @@ extension PlayerWindow {
 
     // MARK: Source actions
 
-    private func selectSource(_ id: Playlist.ID?) {
+    func selectSource(_ id: Playlist.ID?) {
         if renamingPlaylist && id != renameTargetID { cancelRename() }
         // Switch instantly: animating a full header swap (LIBRARY ↔ playlist)
         // interpolates two different layouts and stutters. The pill highlight
@@ -472,5 +475,42 @@ extension PlayerWindow {
     /// nil lets `play()` default to the whole library.
     var libraryPlaybackScope: [Track]? {
         controller.favorites.filterActive ? filteredTracks : nil
+    }
+}
+
+/// Three little bars that dance while a track plays — the universal "now
+/// playing" mark, sized to sit where a source pill's note glyph would. Driven
+/// by a paused-when-idle `TimelineView`, so it costs nothing while stopped or
+/// while the window is hidden; when paused it holds a still, uneven pose.
+struct NowPlayingBars: View {
+    var color: Color
+    var animating: Bool
+
+    private let count = 3
+    private let barWidth: CGFloat = 2
+    private let maxHeight: CGFloat = 9
+    // Distinct speeds/phases per bar so they don't pump in lockstep.
+    private let speeds: [Double] = [5.1, 3.7, 4.4]
+    private let phases: [Double] = [0.0, 1.7, 3.1]
+    private let resting: [CGFloat] = [0.5, 0.85, 0.6]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !animating)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 1.5) {
+                ForEach(0..<count, id: \.self) { i in
+                    Capsule(style: .continuous)
+                        .fill(color)
+                        .frame(width: barWidth, height: height(i, t: t))
+                }
+            }
+            .frame(width: 10, height: maxHeight, alignment: .center)
+        }
+    }
+
+    private func height(_ i: Int, t: Double) -> CGFloat {
+        guard animating else { return maxHeight * resting[i] }
+        let v = (sin(t * speeds[i] + phases[i]) + 1) / 2   // 0…1
+        return maxHeight * (0.3 + 0.7 * CGFloat(v))
     }
 }

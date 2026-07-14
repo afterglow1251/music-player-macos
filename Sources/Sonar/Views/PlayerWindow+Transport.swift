@@ -57,6 +57,11 @@ extension PlayerWindow {
         let track = controller.currentTrack
         let hasArtist = !(track?.artist.isEmpty ?? true)
         return VStack(alignment: .leading, spacing: 3) {
+            // "Playing from <source>" — Spotify-style, so which playlist/library is
+            // live is always on screen instead of hidden among the source tabs.
+            if let source = playingSourceName {
+                playingFromLabel(source)
+            }
             // Title line: click the title to copy it; a YouTube-sourced track also
             // reveals an "open on YouTube" link on hover, tucked after the title.
             HStack(spacing: 6) {
@@ -112,6 +117,29 @@ extension PlayerWindow {
                 }
             }
         }
+    }
+
+    /// The "Playing from <source>" strip above the title. Dancing bars + a muted
+    /// caption naming the live source, and clicking it jumps the list to that
+    /// source — so the playing playlist is always findable, never lost among the
+    /// tabs. Magenta bars here (no coloured fill to clash with) keep the same
+    /// "this is the playing source" language as the source tabs.
+    private func playingFromLabel(_ name: String) -> some View {
+        Button {
+            selectSource(controller.playingSourceID)
+        } label: {
+            HStack(spacing: 5) {
+                NowPlayingBars(color: Theme.logo,
+                               animating: engine.isPlaying && windowOcclusion.isVisible)
+                (Text("Playing from ").foregroundStyle(.white.opacity(0.4))
+                    + Text(name).foregroundStyle(.white.opacity(0.75)))
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Go to \(name)")
     }
 
     var visualizerStrip: some View {
