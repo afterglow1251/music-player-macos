@@ -220,17 +220,13 @@ final class MusicLibrary: ObservableObject {
     }
 
     /// Change the library folder: move existing tracks there, then re-scan/watch.
+    /// Point the library at a different folder and scan whatever's there. It does
+    /// NOT move or copy your existing songs — they stay put in the old folder on
+    /// disk; the library simply now reflects the new one (the "change library
+    /// location" behaviour of Music/iTunes, not a "consolidate/relocate").
     func setFolder(_ newFolder: URL) {
         guard newFolder.standardizedFileURL.path != folder.standardizedFileURL.path else { return }
-        let fm = FileManager.default
-        try? fm.createDirectory(at: newFolder, withIntermediateDirectories: true)
-
-        for track in tracks {
-            let destination = newFolder.appendingPathComponent(track.url.lastPathComponent)
-            if !fm.fileExists(atPath: destination.path) {
-                try? fm.moveItem(at: track.url, to: destination)
-            }
-        }
+        try? FileManager.default.createDirectory(at: newFolder, withIntermediateDirectories: true)
 
         folder = newFolder
         prefs.musicFolderBookmark = try? newFolder.bookmarkData()
