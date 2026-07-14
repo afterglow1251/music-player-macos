@@ -1,11 +1,25 @@
 import SwiftUI
 import AppKit
 
-extension PlayerWindow {
-    // MARK: Error toast
+/// The transient download toasts (error + info), stacked at the bottom of the
+/// window. A standalone view because it observes the `Downloader` directly —
+/// its changes aren't forwarded through `PlayerController`, so toasts appear
+/// without the rest of the window re-rendering on download chatter.
+struct DownloadToasts: View {
+    @ObservedObject var downloader: Downloader
+    let accent: Color
+
+    var body: some View {
+        VStack(spacing: 8) {
+            noticeToast
+            errorToast
+        }
+        .animation(.easeInOut(duration: 0.25), value: downloader.notice)
+        .animation(.easeInOut(duration: 0.25), value: downloader.lastError)
+    }
 
     @ViewBuilder private var errorToast: some View {
-        if let error = controller.downloader.lastError {
+        if let error = downloader.lastError {
             Text(error)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white)
@@ -15,7 +29,7 @@ extension PlayerWindow {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .task(id: error) {
                     try? await Task.sleep(for: .seconds(4))
-                    controller.downloader.lastError = nil
+                    downloader.lastError = nil
                 }
         }
     }
@@ -23,7 +37,7 @@ extension PlayerWindow {
     /// A neutral, accent-coloured info toast (e.g. "Already in library") — the
     /// non-error sibling of `errorToast`.
     @ViewBuilder private var noticeToast: some View {
-        if let notice = controller.downloader.notice {
+        if let notice = downloader.notice {
             Text(notice)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.black)
@@ -33,19 +47,18 @@ extension PlayerWindow {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .task(id: notice) {
                     try? await Task.sleep(for: .seconds(2.5))
-                    controller.downloader.notice = nil
+                    downloader.notice = nil
                 }
         }
     }
+}
+
+extension PlayerWindow {
+    // MARK: Toasts
 
     /// Both transient toasts, stacked at the bottom of the window.
-    @ViewBuilder var bottomToasts: some View {
-        VStack(spacing: 8) {
-            noticeToast
-            errorToast
-        }
-        .animation(.easeInOut(duration: 0.25), value: controller.downloader.notice)
-        .animation(.easeInOut(duration: 0.25), value: controller.downloader.lastError)
+    var bottomToasts: some View {
+        DownloadToasts(downloader: controller.downloader, accent: accent)
     }
 
     // MARK: Drag & drop

@@ -15,6 +15,9 @@ struct MarqueeText: View {
     var weight: Font.Weight? = nil
     var color: Color = .white
     var speed: Double = 35            // points per second
+    /// Freezes the scroll — set while the host window is occluded/minimized so
+    /// the per-frame TimelineView doesn't animate for nobody.
+    var paused: Bool = false
     private let spacing: CGFloat = 44 // gap between the repeated copies
 
     private var resolvedWeight: Font.Weight { weight ?? (bold ? .bold : .regular) }
@@ -31,7 +34,7 @@ struct MarqueeText: View {
             let overflowing = textWidth > geo.size.width + 1
             Group {
                 if overflowing {
-                    TimelineView(.animation) { tl in
+                    TimelineView(.animation(minimumInterval: nil, paused: paused)) { tl in
                         let period = (textWidth + spacing) / speed
                         let phase = period > 0
                             ? tl.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period

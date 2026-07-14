@@ -63,18 +63,11 @@ final class MenuBarController {
         p.hidesOnDeactivate = false
         p.animationBehavior = .none
 
-        let hosting = NSHostingController(
-            rootView: MiniPlayerView(controller: controller, clock: controller.engine.clock,
-                                      windowVisibility: windowVisibility) { [weak self] in
-                // Close the panel first — otherwise the main window becoming key
-                // flips `windowVisibility.isFrontmost` while the panel is still
-                // showing, and the header re-lays-out (button vanishing, artist
-                // label shifting) right before your eyes.
-                self?.dismiss()
-                Self.showMainWindow()
-            }
-        )
-        p.contentViewController = hosting
+        // No content yet — the hosting controller is attached on open and torn
+        // down on close (see `togglePanel`/`dismiss`). An ordered-out panel's
+        // NSHostingView still processes SwiftUI updates, so a persistent one
+        // kept the marquee's per-frame TimelineView and every re-render running
+        // while the panel was "closed". Detaching makes a closed panel free.
 
         // Dismiss when a Spaces swipe / Mission Control gesture hides the panel.
         // During those transitions the WindowServer takes windows like this
@@ -255,16 +248,26 @@ final class MenuBarController {
 
     // MARK: Panel
 
+    private func makeHosting() -> NSViewController {
+        NSHostingController(
+            rootView: MiniPlayerView(controller: controller, clock: controller.engine.clock,
+                                      windowVisibility: windowVisibility) { [weak self] in
+                // Close the panel first — otherwise the main window becoming key
+                // flips `windowVisibility.isFrontmost` while the panel is still
+                // showing, and the header re-lays-out (button vanishing, artist
+                // label shifting) right before your eyes.
+                self?.dismiss()
+                Self.showMainWindow()
+            }
+        )
+    }
+
     private func togglePanel(_ sender: Any?) {
         guard let button = statusItem.button else { return }
         if panel.isVisible {
-            isPanelOpen = false
-            panelDidAppear = false
-            frontmostAppAtOpen = nil
-            panel.orderOut(sender)
-            setOpenIndication(false)
-            removeClickMonitor()
+            dismiss()
         } else {
+            panel.contentViewController = makeHosting()
             // Size the panel to its SwiftUI content BEFORE positioning. On the
             // first open the content hasn't laid out yet, so the panel still
             // reports its placeholder height — if we position against that, the
@@ -326,6 +329,9 @@ final class MenuBarController {
         panelDidAppear = false
         frontmostAppAtOpen = nil
         panel.orderOut(nil)
+        // Drop the SwiftUI content — a hidden panel's hosting view would keep
+        // re-rendering (marquee frames, playback ticks) at full cost otherwise.
+        panel.contentViewController = nil
         setOpenIndication(false)
         removeClickMonitor()
     }
@@ -343,9 +349,10 @@ final class MenuBarController {
 /// The compact now-playing panel shown from the menu-bar button.
 private struct MiniPlayerView: View {
     @ObservedObject var controller: PlayerController
-    /// Observed directly so the progress bar tracks playback — currentTime no
-    /// longer flows through `controller`.
-    @ObservedObject var clock: PlaybackClock
+    /// NOT observed here — the 10 Hz tick would rebuild the whole panel. Only
+    /// the leaves that render the position (the waveform bar, the time labels)
+    /// observe it, mirroring the main window's isolation.
+    let clock: PlaybackClock
     @ObservedObject var windowVisibility: MainWindowVisibility
     let onShowMain: () -> Void
 
@@ -432,12 +439,7 @@ private struct MiniPlayerView: View {
                             isScrubbing: $isScrubbing, scrubTime: $scrubTime,
                             seekHoverX: $seekHoverX,
                             height: 20, muted: .primary.opacity(0.25))
-            HStack {
-                Text(clockTimeString(clock.currentTime, padMinutes: false)).font(.system(size: 9, design: .monospaced))
-                Spacer()
-                Text(clockTimeString(clock.duration, padMinutes: false)).font(.system(size: 9, design: .monospaced))
-            }
-            .foregroundStyle(.secondary)
+            MiniTimeLabels(clock: clock)
         }
     }
 
@@ -459,6 +461,21 @@ private struct MiniPlayerView: View {
         }
     }
 
+}
+
+/// The panel's elapsed/total corner labels. A leaf that observes the clock, so
+/// the 10 Hz playback tick re-renders just these two Texts — not the panel.
+private struct MiniTimeLabels: View {
+    @ObservedObject var clock: PlaybackClock
+
+    var body: some View {
+        HStack {
+            Text(clockTimeString(clock.currentTime, padMinutes: false)).font(.system(size: 9, design: .monospaced))
+            Spacer()
+            Text(clockTimeString(clock.duration, padMinutes: false)).font(.system(size: 9, design: .monospaced))
+        }
+        .foregroundStyle(.secondary)
+    }
 }
 
 /// A native visual-effect view (`NSVisualEffectView`) bridged for SwiftUI.

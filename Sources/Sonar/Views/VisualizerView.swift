@@ -31,6 +31,9 @@ struct VisualizerView: View {
     /// Transparent background so the tiles blend onto whatever's behind them
     /// (a blurred cover in fullscreen) instead of a hard black box.
     var transparentBackground: Bool = false
+    /// Externally forced pause — set while the window is occluded/minimized,
+    /// when painting frames nobody can see would be pure waste.
+    var suspended: Bool = false
 
     private let tileGap: CGFloat = 1 // 1px gap => the "tiles" look
 
@@ -49,9 +52,10 @@ struct VisualizerView: View {
             }
     }
 
-    /// The CPU-drawn modes, capped at ~30fps and paused when nothing is playing.
+    /// The CPU-drawn modes, capped at ~30fps and paused when nothing is playing
+    /// (or the window isn't visible).
     private var canvas: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying || suspended)) { timeline in
             Canvas { context, size in
                 if !transparentBackground {
                     context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Palette.background))

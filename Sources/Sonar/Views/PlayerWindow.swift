@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 /// a blurred artwork backdrop, glassy panels, and the classic tile visualizer.
 struct PlayerWindow: View {
     @StateObject var controller = PlayerController.shared
+    /// Pauses the per-frame eye candy (visualizer, breathing cover, marquee)
+    /// while the window can't be seen — fully covered, minimized, other Space.
+    @StateObject var windowOcclusion = WindowOcclusionMonitor()
     @State var isFullscreen = false
     @State var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
     @State var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
@@ -174,7 +177,7 @@ struct PlayerWindow: View {
             positionSlider
             transportRow
             utilityRow
-            DownloadBar(controller: controller, urlChips: $urlChips, shakingChipURL: $shakingChipURL, urlFieldFocused: $urlFieldFocused)
+            DownloadBar(controller: controller, downloader: controller.downloader, urlChips: $urlChips, shakingChipURL: $shakingChipURL, urlFieldFocused: $urlFieldFocused)
             librarySection
         }
         .padding(16)

@@ -12,6 +12,9 @@ import AppKit
 /// keyboard shortcuts; the bar only forwards it into the field.
 struct DownloadBar: View {
     @ObservedObject var controller: PlayerController
+    /// Observed directly — download progress/status aren't forwarded through
+    /// `controller`, so their high-frequency ticks re-render only this bar.
+    @ObservedObject var downloader: Downloader
     /// Links queued via the ＋ button. Owned by `PlayerWindow` so they survive the
     /// fullscreen branch swap; passed in as a binding.
     @Binding var urlChips: [String]
@@ -58,7 +61,7 @@ struct DownloadBar: View {
                 // Status (Preparing… / Downloading X% / Processing…) lives here
                 // now, so the field's placeholder can invite adding to the queue.
                 if downloading {
-                    AnimatedStatusText(status: controller.downloader.status)
+                    AnimatedStatusText(status: downloader.status)
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
@@ -119,8 +122,8 @@ struct DownloadBar: View {
                         GeometryReader { geo in
                             Capsule()
                                 .fill(accent.opacity(0.22))
-                                .frame(width: max(0, geo.size.width * controller.downloader.progress))
-                                .animation(.easeOut(duration: 0.3), value: controller.downloader.progress)
+                                .frame(width: max(0, geo.size.width * downloader.progress))
+                                .animation(.easeOut(duration: 0.3), value: downloader.progress)
                         }
                     }
                 }
@@ -138,7 +141,7 @@ struct DownloadBar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 4)
 
-            if !downloading && !controller.downloader.isAvailable {
+            if !downloading && !downloader.isAvailable {
                 Text("yt-dlp not found — run: brew install yt-dlp")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange.opacity(0.9))
@@ -213,7 +216,7 @@ struct DownloadBar: View {
     }
 
     private var canDownload: Bool {
-        controller.downloader.isAvailable && (!urlChips.isEmpty || controller.urlInput.contains("http"))
+        downloader.isAvailable && (!urlChips.isEmpty || controller.urlInput.contains("http"))
     }
 
     private var pendingURLCount: Int {
@@ -240,7 +243,7 @@ struct DownloadBar: View {
             // Stop at the first non-URL token so we never eat plain text.
             guard head.contains("http") else { break }
             if controller.isAlreadyDownloaded(head) {   // instant, no yt-dlp
-                controller.downloader.notice = "Already in library"
+                downloader.notice = "Already in library"
                 controller.urlInput = tail
                 continue
             }
@@ -259,7 +262,7 @@ struct DownloadBar: View {
         let url = controller.urlInput.trimmingCharacters(in: .whitespaces)
         guard url.contains("http") else { return }
         if controller.isAlreadyDownloaded(url) {         // instant, no yt-dlp
-            controller.downloader.notice = "Already in library"
+            downloader.notice = "Already in library"
             controller.urlInput = ""
             urlFieldFocused.wrappedValue = true
             return
@@ -295,7 +298,7 @@ struct DownloadBar: View {
         let field = controller.urlInput.trimmingCharacters(in: .whitespaces)
         if field.contains("http") {
             if controller.isAlreadyDownloaded(field) {
-                controller.downloader.notice = "Already in library"
+                downloader.notice = "Already in library"
                 controller.urlInput = ""
             } else if isStagedOrQueued(field) {
                 flagDuplicate(field)          // already staged/queued — shake that chip

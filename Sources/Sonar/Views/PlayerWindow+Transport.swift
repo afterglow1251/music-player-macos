@@ -10,12 +10,16 @@ extension PlayerWindow {
     /// The breathing cover, at an arbitrary size (fullscreen uses a big square).
     private func heroArtView(width: CGFloat, height: CGFloat) -> some View {
         // The artwork gently "breathes" with the bass while playing (capped at
-        // 30fps, and stopped when paused so it doesn't spin the CPU while idle).
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !engine.isPlaying)) { _ in
+        // 30fps, and stopped when paused or unseen so it doesn't spin the CPU).
+        // Built once out here: each frame re-applies only the scale to the same
+        // view value instead of rebuilding the whole artwork ZStack.
+        let content = artworkContent(width: width, height: height)
+        return TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                       paused: !engine.isPlaying || !windowOcclusion.isVisible)) { _ in
             // bassLevel eases to 0 when paused, so the scale glides back to 1
             // smoothly instead of snapping.
             let bass = CGFloat(min(max(engine.analyzer.bassLevel, 0), 1))
-            artworkContent(width: width, height: height).scaleEffect(1 + bass * 0.035)
+            content.scaleEffect(1 + bass * 0.035)
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -56,7 +60,8 @@ extension PlayerWindow {
             // Title line: click the title to copy it; a YouTube-sourced track also
             // reveals an "open on YouTube" link on hover, tucked after the title.
             HStack(spacing: 6) {
-                MarqueeText(text: nowPlayingTitle, fontSize: 15, bold: true, color: .white)
+                MarqueeText(text: nowPlayingTitle, fontSize: 15, bold: true, color: .white,
+                            paused: !windowOcclusion.isVisible)
                     .copyOnClick(nowPlayingTitle, help: "Click to copy title", enabled: track != nil)
                 if let youtubeURL = track?.youtubeURL {
                     Button { openInBrowser(youtubeURL) } label: {
@@ -112,7 +117,8 @@ extension PlayerWindow {
     var visualizerStrip: some View {
         VisualizerView(engine: engine, mode: $visualizerMode, theme: controller.theme,
                        rows: isFullscreen ? 22 : 16, columnScale: isFullscreen ? 2 : 1,
-                       transparentBackground: isFullscreen)
+                       transparentBackground: isFullscreen,
+                       suspended: !windowOcclusion.isVisible)
             .frame(height: isFullscreen ? 88 : 48)
             .frame(maxWidth: .infinity)
     }

@@ -120,10 +120,15 @@ final class PlayerController: ObservableObject {
         nowPlaying.onNext = { [weak self] in self?.next() }
         nowPlaying.onPrevious = { [weak self] in self?.previous() }
 
-        // Re-publish child changes so the view updates.
+        // Re-publish child changes so the view updates. The downloader is
+        // deliberately NOT forwarded: it publishes progress/status on every
+        // yt-dlp output line, and routing that through this controller
+        // re-rendered every observer — the whole window, the menu-bar panel,
+        // the status button — for the entire length of a download. Views that
+        // show download state observe `downloader` directly instead.
         for child in [engine.objectWillChange, library.objectWillChange,
                       playlists.objectWillChange, favorites.objectWillChange,
-                      downloader.objectWillChange, lyrics.objectWillChange] {
+                      lyrics.objectWillChange] {
             child.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         }
 
