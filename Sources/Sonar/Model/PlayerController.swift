@@ -538,7 +538,7 @@ final class PlayerController: ObservableObject {
         }
         // Stage the download in a hidden dir the watcher never sees, so a
         // half-written file can never appear as a (deletable, race-prone) row.
-        // The finished mp3 is adopted into the library; staging is discarded on
+        // The finished file is adopted into the library; staging is discarded on
         // every exit path — cancel, failure, adopt failure, and success.
         guard let stagingDir = library.makeStagingDir() else {
             downloader.lastError = "Couldn't prepare download"

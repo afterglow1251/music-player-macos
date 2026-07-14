@@ -24,7 +24,7 @@ struct DownloadBar: View {
     /// Accent — the signature green, used sparingly.
     private let accent = Theme.accent
 
-    // MARK: Download bar (YouTube URL → mp3)
+    // MARK: Download bar (YouTube URL → m4a)
 
     var body: some View {
         let downloading = controller.downloadsLeft > 0
@@ -55,7 +55,7 @@ struct DownloadBar: View {
                     .onChange(of: controller.urlInput) { _, _ in chipCompletedURLs() }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Status (Preparing… / Downloading X% / Converting to mp3…) lives here
+                // Status (Preparing… / Downloading X% / Processing…) lives here
                 // now, so the field's placeholder can invite adding to the queue.
                 if downloading {
                     AnimatedStatusText(status: controller.downloader.status)
@@ -97,8 +97,8 @@ struct DownloadBar: View {
                           : (urlChips.isEmpty ? "Download" : "Download \(pendingURLCount)"))
                 }
                 // Cancel everything while downloading — stays live through the
-                // convert/embed phase too: with staging, cancelling then just
-                // discards the half-written file instead of leaving a stray mp3.
+                // extract/embed phase too: with staging, cancelling then just
+                // discards the half-written file instead of leaving a stray track.
                 if downloading {
                     Button { controller.cancelDownload() } label: {
                         Image(systemName: "xmark.circle.fill")

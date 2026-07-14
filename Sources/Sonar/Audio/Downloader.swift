@@ -10,7 +10,8 @@ private final class OutputBox: @unchecked Sendable {
 }
 
 /// Downloads audio from a URL (YouTube etc.) by shelling out to `yt-dlp`,
-/// converting to mp3 with embedded artwork and metadata via `ffmpeg`.
+/// keeping the source's native AAC stream as m4a (no re-encode) with embedded
+/// artwork and metadata; only sources with no m4a stream get transcoded.
 ///
 /// GUI apps don't inherit the shell's PATH, so we locate the binaries in the
 /// usual Homebrew/system locations and pass an explicit PATH to the subprocess.
@@ -19,8 +20,8 @@ final class Downloader: ObservableObject {
     @Published var isDownloading = false
     @Published var progress: Double = 0      // 0...1
     @Published var status: String = ""
-    /// True during the post-download convert/embed phase (ExtractAudio + thumbnail
-    /// and metadata), used to surface a "Converting…" status. Cancelling here is
+    /// True during the post-download extract/embed phase (ExtractAudio + thumbnail
+    /// and metadata), used to surface a "Processing…" status. Cancelling here is
     /// safe now: the intermediate lives in staging and is discarded on abort.
     @Published private(set) var isConverting = false
     /// Set on a failure so the UI can show a transient error toast.
@@ -85,7 +86,7 @@ final class Downloader: ObservableObject {
     }
 
     /// Download `urlString` into `stagingDir` (a fresh, hidden dir the library
-    /// hands us). Returns the new mp3's URL on success; the caller adopts it into
+    /// hands us). Returns the new m4a's URL on success; the caller adopts it into
     /// the library and discards the staging dir on every exit path.
     func download(_ urlString: String, into stagingDir: URL) async -> URL? {
         guard let ytDlpPath else {
@@ -115,7 +116,12 @@ final class Downloader: ObservableObject {
         isConverting = false
         defer { isDownloading = false; isConverting = false }
 
-        let args = ["-x", "--audio-format", "mp3", "--audio-quality", "0",
+        // Prefer the native AAC (m4a) stream so the audio is stored bit-exact —
+        // no lossy re-encode, no conversion wait. `--audio-format m4a` only
+        // transcodes when the fallback (`bestaudio`, e.g. Opus) was the sole
+        // option, keeping every download in a container AVFoundation can play.
+        let args = ["-f", "bestaudio[ext=m4a]/bestaudio",
+                    "-x", "--audio-format", "m4a", "--audio-quality", "0",
                     "--no-playlist", "--embed-thumbnail", "--add-metadata",
                     // Fill the artist tag from the channel when the video has no
                     // artist of its own (keeps a real artist tag where present).
@@ -137,11 +143,11 @@ final class Downloader: ObservableObject {
             return nil
         }
 
-        // The staging dir was freshly created for this one download, so the mp3
+        // The staging dir was freshly created for this one download, so the m4a
         // yt-dlp just wrote is the only one in it.
         let produced = (try? FileManager.default.contentsOfDirectory(
             at: stagingDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
-        let result = produced.first { $0.pathExtension.lowercased() == "mp3" }
+        let result = produced.first { $0.pathExtension.lowercased() == "m4a" }
 
         status = result != nil ? "Done" : "File not found"
         progress = 1
@@ -181,7 +187,7 @@ final class Downloader: ObservableObject {
                         self.status = "Downloading \(Int(percent))%"
                         self.isConverting = false
                     } else if converting {
-                        self.status = "Converting to mp3…"
+                        self.status = "Processing…"
                         self.isConverting = true
                     }
                 }
