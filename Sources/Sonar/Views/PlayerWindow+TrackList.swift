@@ -408,6 +408,11 @@ extension PlayerWindow {
                 handleReorderDrag(id: path, cursorY: y) { finishPlaylistReorder(path: path, in: playlist) }
             },
             onReorderEnded: { finishPlaylistReorder(path: path, in: playlist) },
+            // Same "Add to Playlist ▸" submenu as a library row — a track inside
+            // one playlist can be added to the others (the current one shows a
+            // checkmark, since it already contains it).
+            addToPlaylists: playlistMenuItems(for: track),
+            onNewPlaylistWithTrack: { createPlaylist(addingTrack: track, select: false) },
             onRemoveFromPlaylist: {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     controller.playlists.remove(path: path, from: playlist.id)
