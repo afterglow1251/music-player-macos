@@ -189,6 +189,9 @@ extension PlayerWindow {
                                selected: selectedPlaylistID == playlist.id) { selectSource(playlist.id) }
                         .contextMenu {
                             Button("Play") { controller.playPlaylist(playlist) }
+                            Button("Play Next") { controller.playNext(playlist) }
+                            Button("Add to Queue") { controller.addToQueue(playlist) }
+                            Divider()
                             Button("Rename") { beginRename(id: playlist.id, current: playlist.name) }
                             Divider()
                             Button("Delete", role: .destructive) { deletePlaylist(playlist.id) }

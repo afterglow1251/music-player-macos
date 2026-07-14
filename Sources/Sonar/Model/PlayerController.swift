@@ -395,6 +395,14 @@ final class PlayerController: ObservableObject {
         playGroup(tracks(in: playlist), from: playlist.id)
     }
 
+    /// Queue a whole playlist to play right after the current track, in playlist
+    /// order. A snapshot: later edits to the playlist don't touch the queue.
+    func playNext(_ playlist: Playlist) { playNext(tracks(in: playlist)) }
+
+    /// Append a whole playlist to the end of the queue, in playlist order. Also
+    /// a snapshot — see `playNext(_:)`.
+    func addToQueue(_ playlist: Playlist) { addToQueue(tracks(in: playlist)) }
+
     /// Snapshot the current queue into a new playlist. Returns nil if the queue
     /// is empty (nothing to save).
     @discardableResult
