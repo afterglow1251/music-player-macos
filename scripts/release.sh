@@ -54,7 +54,7 @@ echo "✓ Wrote $ZIP"
 
 if [ "$PUBLISH" -eq 0 ]; then
     echo "  (--no-publish) Upload it manually at:"
-    echo "  https://github.com/afterglow1251/music-player-macos/releases/new"
+    echo "  https://github.com/afterglow1251/music-player-macos-Sonar/releases/new"
     exit 0
 fi
 
@@ -72,4 +72,4 @@ gh release create "$TAG" "$ZIP" \
     --prerelease
 
 echo "✓ Released. Share this link:"
-echo "  https://github.com/afterglow1251/music-player-macos/releases/tag/$TAG"
+echo "  https://github.com/afterglow1251/music-player-macos-Sonar/releases/tag/$TAG"

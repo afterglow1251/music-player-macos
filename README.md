@@ -11,8 +11,8 @@
   <img src="https://img.shields.io/badge/platform-macOS%2014%2B-0d1117?style=flat-square&logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6">
   <img src="https://img.shields.io/badge/UI-SwiftUI-0a84ff?style=flat-square" alt="SwiftUI">
-  <img src="https://img.shields.io/github/v/release/afterglow1251/music-player-macos?include_prereleases&style=flat-square&color=34d399" alt="Latest release">
-  <img src="https://img.shields.io/github/license/afterglow1251/music-player-macos?style=flat-square&color=a855f7" alt="MIT license">
+  <img src="https://img.shields.io/github/v/release/afterglow1251/music-player-macos-Sonar?include_prereleases&style=flat-square&color=34d399" alt="Latest release">
+  <img src="https://img.shields.io/github/license/afterglow1251/music-player-macos-Sonar?style=flat-square&color=a855f7" alt="MIT license">
 </p>
 
 ---
@@ -36,7 +36,7 @@
 ## 📥 Download
 
 Grab the latest beta from the
-**[Releases page](https://github.com/afterglow1251/music-player-macos/releases/latest)** —
+**[Releases page](https://github.com/afterglow1251/music-player-macos-Sonar/releases/latest)** —
 download `Sonar-<version>.zip`, unzip it, and drag **Sonar.app** into your
 **Applications** folder.
 

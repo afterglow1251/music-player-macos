@@ -26,7 +26,7 @@ log / diff yourself (`git log -1`, `git show`) to write an accurate issue.
    a duplicate.
 2. **Gather the commit.** Get the latest commit hash (`git log -1 --format=%H`)
    and build the GitHub link:
-   `https://github.com/afterglow1251/music-player-macos/commit/<hash>`.
+   `https://github.com/afterglow1251/music-player-macos-Sonar/commit/<hash>`.
    Only attach it if the commit is actually pushed (`git branch -r --contains <hash>`
    returns something) — an unpushed link is dead.
 3. **Create / update** via `save_issue`:
