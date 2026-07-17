@@ -20,10 +20,27 @@ final class PlaylistStore: ObservableObject {
 
     private let prefs: Preferences
 
+    /// The library folder these playlists belong to. A playlist is a set of paths
+    /// into one folder, so it's stored per folder and only ever shown alongside
+    /// the folder it was built from — point the library elsewhere and you get
+    /// that folder's playlists, not a set of names that resolve to nothing.
+    private(set) var folder: URL
+
     /// `prefs` is injectable so tests can use an isolated UserDefaults suite
     /// instead of touching the real one.
     init(prefs: Preferences = Preferences()) {
         self.prefs = prefs
+        self.folder = MusicLibrary.resolveFolder(prefs: prefs)
+        LibraryScopeMigration.run(prefs: prefs, currentFolder: folder)
+        load()
+    }
+
+    /// Follow the library to a different folder: swap in that folder's playlists.
+    /// Nothing needs saving first — every mutation already persisted itself under
+    /// the folder it happened in, so the old set stays on disk for the trip back.
+    func setFolder(_ newFolder: URL) {
+        guard newFolder.standardizedFileURL.path != folder.standardizedFileURL.path else { return }
+        folder = newFolder
         load()
     }
 
@@ -100,13 +117,16 @@ final class PlaylistStore: ObservableObject {
         return "Playlist \(n)"
     }
 
+    /// Assigns unconditionally rather than bailing out on a miss: `setFolder` uses
+    /// this to switch scopes, and a folder with no playlists yet must come up
+    /// empty instead of keeping the previous folder's.
     private func load() {
-        guard let data = prefs.playlists,
-              let decoded = try? JSONDecoder().decode([Playlist].self, from: data) else { return }
-        playlists = decoded
+        let decoded = prefs.playlists(for: folder)
+            .flatMap { try? JSONDecoder().decode([Playlist].self, from: $0) }
+        playlists = decoded ?? []
     }
 
     private func save() {
-        prefs.playlists = try? JSONEncoder().encode(playlists)
+        prefs.setPlaylists(try? JSONEncoder().encode(playlists), for: folder)
     }
 }

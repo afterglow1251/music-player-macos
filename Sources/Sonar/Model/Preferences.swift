@@ -40,6 +40,79 @@ final class Preferences {
         case themeName, albumTheme, lastTrack, lastPosition, musicFolderBookmark
         case libraryOrder, librarySort, playlists
         case favorites, favoritesFilter
+        case folderScopedStateMigrated
+    }
+
+    // MARK: Folder-scoped state
+
+    /// Playlists and the manual order describe *one library folder's* files, so
+    /// they're keyed by that folder rather than stored once for the whole app.
+    /// Globally-stored state broke both when the folder changed: playlists came up
+    /// empty because every saved path resolved against the wrong folder, and the
+    /// manual order was overwritten outright by the first scan of the new folder.
+    /// Scoped, pointing the library elsewhere and back restores both intact.
+    private func scopedKey(_ key: Key, _ folder: URL) -> String {
+        "\(key.rawValue).\(folder.standardizedFileURL.path)"
+    }
+
+    /// Manual library order for `folder` — file paths in the order the user
+    /// arranged them. New files not in this list are appended; missing ones are
+    /// dropped on scan.
+    func libraryOrder(for folder: URL) -> [String] {
+        defaults.array(forKey: scopedKey(.libraryOrder, folder)) as? [String] ?? []
+    }
+
+    func setLibraryOrder(_ order: [String], for folder: URL) {
+        defaults.set(order, forKey: scopedKey(.libraryOrder, folder))
+    }
+
+    /// JSON-encoded `[Playlist]` built out of `folder`'s files.
+    func playlists(for folder: URL) -> Data? {
+        defaults.data(forKey: scopedKey(.playlists, folder))
+    }
+
+    func setPlaylists(_ data: Data?, for folder: URL) {
+        defaults.set(data, forKey: scopedKey(.playlists, folder))
+    }
+
+    /// Carry a folder's scoped state over when the folder itself is renamed or
+    /// moved. The bookmark already follows the folder, so without this the state
+    /// would be stranded under the old path's key — a rename would read as "my
+    /// playlists vanished". Saved paths are re-pointed at the new location too,
+    /// since they're absolute and would otherwise all dangle.
+    func moveFolderScope(from old: URL, to new: URL) {
+        let oldPath = old.standardizedFileURL.path
+        let newPath = new.standardizedFileURL.path
+        guard oldPath != newPath else { return }
+
+        func repoint(_ path: String) -> String {
+            path == oldPath || path.hasPrefix(oldPath + "/")
+                ? newPath + path.dropFirst(oldPath.count)
+                : path
+        }
+
+        let order = libraryOrder(for: old)
+        if !order.isEmpty {
+            setLibraryOrder(order.map(repoint), for: new)
+            defaults.removeObject(forKey: scopedKey(.libraryOrder, old))
+        }
+
+        if let data = playlists(for: old) {
+            var moved = data
+            if var lists = try? JSONDecoder().decode([Playlist].self, from: data) {
+                for i in lists.indices { lists[i].trackPaths = lists[i].trackPaths.map(repoint) }
+                moved = (try? JSONEncoder().encode(lists)) ?? data
+            }
+            setPlaylists(moved, for: new)
+            defaults.removeObject(forKey: scopedKey(.playlists, old))
+        }
+    }
+
+    /// Whether the one-time move of globally-stored playlists and manual order
+    /// onto per-folder keys has run. See `LibraryScopeMigration`.
+    var folderScopedStateMigrated: Bool {
+        get { defaults.bool(forKey: Key.folderScopedStateMigrated.rawValue) }
+        set { defaults.set(newValue, forKey: Key.folderScopedStateMigrated.rawValue) }
     }
 
     /// Favorited tracks — file paths, the same "currency" as `libraryOrder` and
@@ -57,11 +130,11 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.favoritesFilter.rawValue) }
     }
 
-    /// Manual library order — file paths in the order the user arranged them.
-    /// New files not in this list are appended; missing ones are dropped on scan.
-    var libraryOrder: [String] {
-        get { defaults.array(forKey: Key.libraryOrder.rawValue) as? [String] ?? [] }
-        set { defaults.set(newValue, forKey: Key.libraryOrder.rawValue) }
+    /// The pre-scoping global manual order. Read once by `LibraryScopeMigration`
+    /// and never written again — live reads/writes go through `libraryOrder(for:)`.
+    /// Left in place after migrating as a safety net, not as a fallback.
+    var legacyLibraryOrder: [String] {
+        defaults.array(forKey: Key.libraryOrder.rawValue) as? [String] ?? []
     }
 
     /// The library view — defaults to the hand-arranged manual order.
@@ -70,10 +143,10 @@ final class Preferences {
         set { defaults.set(newValue.rawValue, forKey: Key.librarySort.rawValue) }
     }
 
-    /// JSON-encoded `[Playlist]`.
-    var playlists: Data? {
-        get { defaults.data(forKey: Key.playlists.rawValue) }
-        set { defaults.set(newValue, forKey: Key.playlists.rawValue) }
+    /// The pre-scoping global playlists — migration's input only, like
+    /// `legacyLibraryOrder`. Live access is `playlists(for:)`.
+    var legacyPlaylists: Data? {
+        defaults.data(forKey: Key.playlists.rawValue)
     }
 
     /// Bookmark to the music folder — survives the folder being renamed/moved

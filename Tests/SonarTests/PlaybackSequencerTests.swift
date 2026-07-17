@@ -176,4 +176,30 @@ struct PlaybackSequencerTests {
             queueFront: nil, shuffle: false, repeatMode: .off, sleepUntilEndOfTrack: false)
         #expect(decision == .none)
     }
+
+    // MARK: - Library folder switched mid-playback
+
+    /// `PlayerController.libraryFolderChanged` clears the scope when the library is
+    /// pointed at another folder, leaving the old folder's track playing on. This is
+    /// the contract that makes that work: with no scope, the walk falls back to the
+    /// library — the *new* folder — even though the current track isn't in it. So
+    /// the song you're hearing finishes, and ⏭ lands you in the folder on screen
+    /// rather than deeper into the one you just left.
+    @Test func clearedScopeAdvancesIntoTheNewLibrary() {
+        let newFolder = [a, b, c]
+        let decision = PlaybackSequencer.nextDecision(
+            auto: false, current: notInList, library: newFolder, scope: [],
+            queueFront: nil, shuffle: false, repeatMode: .off, sleepUntilEndOfTrack: false)
+        #expect(decision == .play(a, scope: newFolder, fromQueue: false))
+    }
+
+    /// Same on auto-advance: the track ends and the new folder takes over, rather
+    /// than reporting "end of scope" and stopping.
+    @Test func clearedScopeAutoAdvancesIntoTheNewLibrary() {
+        let newFolder = [a, b, c]
+        let decision = PlaybackSequencer.nextDecision(
+            auto: true, current: notInList, library: newFolder, scope: [],
+            queueFront: nil, shuffle: false, repeatMode: .off, sleepUntilEndOfTrack: false)
+        #expect(decision == .play(a, scope: newFolder, fromQueue: false))
+    }
 }

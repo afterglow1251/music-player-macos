@@ -25,6 +25,7 @@ final class MusicLibrary: ObservableObject {
     init() {
         folder = Self.resolveFolder(prefs: Preferences())
         view = prefs.libraryView
+        LibraryScopeMigration.run(prefs: prefs, currentFolder: folder)
         Self.migrateLegacyFiles(into: folder)
         // Clear any staging left behind by a download the app didn't finish
         // (crash/quit) — its contents are junk. Done before watching so the
@@ -269,6 +270,9 @@ final class MusicLibrary: ObservableObject {
     private func followRename() {
         guard watchedFD >= 0, let url = Self.currentFolderURL(of: watchedFD) else { return }
         if url.standardizedFileURL.path != folder.standardizedFileURL.path {
+            // Carry this folder's playlists and manual order to the new path
+            // before repointing, or they'd be stranded under the old one's key.
+            prefs.moveFolderScope(from: folder, to: url)
             folder = url
             prefs.musicFolderBookmark = try? url.bookmarkData()
         }
@@ -301,7 +305,7 @@ final class MusicLibrary: ObservableObject {
     /// Reconcile a list with the saved manual order: known files keep their saved
     /// position, new files sort in alphabetically at the end, and it's re-persisted.
     private func manuallyOrdered(_ list: [Track]) -> [Track] {
-        let position = Dictionary(prefs.libraryOrder.enumerated().map { ($1, $0) },
+        let position = Dictionary(prefs.libraryOrder(for: folder).enumerated().map { ($1, $0) },
                                   uniquingKeysWith: { first, _ in first })
         let sorted = list.sorted { a, b in
             switch (position[a.url.path], position[b.url.path]) {
@@ -312,7 +316,7 @@ final class MusicLibrary: ObservableObject {
                 return a.displayTitle.localizedCaseInsensitiveCompare(b.displayTitle) == .orderedAscending
             }
         }
-        prefs.libraryOrder = sorted.map(\.url.path)
+        prefs.setLibraryOrder(sorted.map(\.url.path), for: folder)
         return sorted
     }
 
@@ -327,7 +331,7 @@ final class MusicLibrary: ObservableObject {
     }
 
     /// Persist the current order once a drag finishes.
-    func commitOrder() { prefs.libraryOrder = tracks.map(\.url.path) }
+    func commitOrder() { prefs.setLibraryOrder(tracks.map(\.url.path), for: folder) }
 
     /// Order tracks by artist → track number → title, so one artist's tracks read
     /// in a sensible order. Untagged fields sort last within their level.

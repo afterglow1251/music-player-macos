@@ -143,6 +143,15 @@ final class PlayerController: ObservableObject {
             child.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         }
 
+        // Follow the library to whatever folder it's pointed at — including a rename
+        // it picked up on its own. `dropFirst` because this is about *changes*: both
+        // stores resolve the same folder at init, so the initial value is already
+        // in effect and re-applying it would reset a context restoreLastTrack built.
+        library.$folder
+            .dropFirst()
+            .sink { [weak self] folder in self?.libraryFolderChanged(to: folder) }
+            .store(in: &cancellables)
+
         // When the library rescans (e.g. a download finished writing its tags and
         // artwork), refresh the now-playing track so its cover/title/duration
         // update on their own — without needing a re-play.
@@ -426,6 +435,39 @@ final class PlayerController: ObservableObject {
     /// Favorite or unfavorite a set of tracks at once (multi-select).
     func setFavorite(_ tracks: [Track], to favorite: Bool) {
         favorites.setFavorite(Set(tracks.map { $0.url.path }), to: favorite)
+    }
+
+    // MARK: Library folder
+
+    /// The library was pointed at a different folder. Playlists follow it, and the
+    /// listening session built out of the old folder ends here.
+    ///
+    /// What plays right now is deliberately left alone — swapping a setting
+    /// shouldn't cut a song off mid-bar, and the engine holds its own open file, so
+    /// it plays on happily. Everything that would *generate* from the old folder is
+    /// dropped instead, so the next track comes from the folder you actually have
+    /// on screen. Without this the scope — a frozen snapshot array, not a live view
+    /// of the library — still contains the current track, so ⏭ would walk you
+    /// deeper into a folder with no rows to show for it.
+    private func libraryFolderChanged(to folder: URL) {
+        playlists.setFolder(folder)
+
+        // Each of these points into the folder we just left: the walk list, the
+        // anchor parked in it, tracks lined up off it, and the retrace trail.
+        scope = []
+        resumeAnchor = nil
+        liveSourceID = nil
+        resetShuffle()
+        queue.removeAll()
+
+        // Keep the audible track as history's sole entry: ⏮ needs a valid head, and
+        // anything behind it is in the old folder. Its source label goes with it —
+        // the playlist it came from isn't on screen any more either.
+        if let current = currentTrack {
+            history.reset(to: PlayHistoryEntry(track: current, sourceID: nil, fromQueue: false))
+            playingSourceID = nil
+            playingFromQueue = false
+        }
     }
 
     // MARK: Playlists
