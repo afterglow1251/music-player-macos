@@ -451,6 +451,7 @@ final class PlayerController: ObservableObject {
     /// deeper into a folder with no rows to show for it.
     private func libraryFolderChanged(to folder: URL) {
         playlists.setFolder(folder)
+        favorites.setFolder(folder)
 
         // Each of these points into the folder we just left: the walk list, the
         // anchor parked in it, tracks lined up off it, and the retrace trail.

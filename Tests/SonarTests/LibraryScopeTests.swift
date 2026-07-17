@@ -82,6 +82,43 @@ struct LibraryScopeTests {
         #expect(read(prefs, in: old).map(\.name) == ["Old"])
     }
 
+    // MARK: Favorites
+
+    @Test func favoritesAreKeptPerFolder() {
+        let (prefs, _) = preferences()
+        prefs.setFavorites(["/Music/test1/a.mp3"], for: old)
+
+        #expect(prefs.favorites(for: new).isEmpty)
+        #expect(prefs.favorites(for: old) == ["/Music/test1/a.mp3"])
+    }
+
+    /// A filter left on in a folder full of favorites shouldn't greet you with an
+    /// empty list in one that has none.
+    @Test func favoritesFilterIsKeptPerFolder() {
+        let (prefs, _) = preferences()
+        prefs.setFavoritesFilter(true, for: old)
+
+        #expect(prefs.favoritesFilter(for: old))
+        #expect(!prefs.favoritesFilter(for: new))
+    }
+
+    @MainActor
+    @Test func switchingFolderAndBackRestoresFavorites() {
+        let (prefs, _) = preferences()
+        prefs.musicFolderBookmark = nil
+        prefs.setFavorites(["/Music/test1/a.mp3"], for: old)
+
+        let favorites = FavoritesStore(prefs: prefs)
+        favorites.setFolder(old)
+        #expect(favorites.isFavorite("/Music/test1/a.mp3"))
+
+        favorites.setFolder(new)
+        #expect(favorites.paths.isEmpty)
+
+        favorites.setFolder(old)
+        #expect(favorites.isFavorite("/Music/test1/a.mp3"))
+    }
+
     // MARK: Rename
 
     @Test func renamingAFolderCarriesItsStateAndRepointsPaths() {

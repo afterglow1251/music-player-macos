@@ -45,12 +45,13 @@ final class Preferences {
 
     // MARK: Folder-scoped state
 
-    /// Playlists and the manual order describe *one library folder's* files, so
-    /// they're keyed by that folder rather than stored once for the whole app.
-    /// Globally-stored state broke both when the folder changed: playlists came up
-    /// empty because every saved path resolved against the wrong folder, and the
-    /// manual order was overwritten outright by the first scan of the new folder.
-    /// Scoped, pointing the library elsewhere and back restores both intact.
+    /// Playlists, the manual order and favorites all describe *one library
+    /// folder's* files, so they're keyed by that folder rather than stored once for
+    /// the whole app. Globally-stored state broke the first two when the folder
+    /// changed: playlists came up empty because every saved path resolved against
+    /// the wrong folder, and the manual order was overwritten outright by the first
+    /// scan of the new folder. Scoped, pointing the library elsewhere and back
+    /// restores them intact.
     private func scopedKey(_ key: Key, _ folder: URL) -> String {
         "\(key.rawValue).\(folder.standardizedFileURL.path)"
     }
@@ -73,6 +74,35 @@ final class Preferences {
 
     func setPlaylists(_ data: Data?, for folder: URL) {
         defaults.set(data, forKey: scopedKey(.playlists, folder))
+    }
+
+    /// Favorited paths among `folder`'s files. Unordered in spirit (an array only
+    /// because UserDefaults has no Set); missing files are simply ignored on lookup.
+    ///
+    /// Unlike playlists and the manual order, these never actually broke when the
+    /// folder changed — a path is unique to the folder holding it, so a lookup
+    /// against the wrong folder just missed. Scoping them is about the model rather
+    /// than a bug: every folder owns the state describing its own files, and no one
+    /// folder's set carries paths from every folder ever opened. There's no
+    /// migration off the old global key for the same reason — nothing there resolved
+    /// anywhere but its own folder, so there was nothing to rescue.
+    func favorites(for folder: URL) -> [String] {
+        defaults.array(forKey: scopedKey(.favorites, folder)) as? [String] ?? []
+    }
+
+    func setFavorites(_ paths: [String], for folder: URL) {
+        defaults.set(paths, forKey: scopedKey(.favorites, folder))
+    }
+
+    /// Whether the library list is filtered to favorites only, per folder — so a
+    /// filter left on in a folder full of favorites can't greet you with an empty
+    /// list in one that has none.
+    func favoritesFilter(for folder: URL) -> Bool {
+        defaults.bool(forKey: scopedKey(.favoritesFilter, folder))
+    }
+
+    func setFavoritesFilter(_ on: Bool, for folder: URL) {
+        defaults.set(on, forKey: scopedKey(.favoritesFilter, folder))
     }
 
     /// Carry a folder's scoped state over when the folder itself is renamed or
@@ -113,21 +143,6 @@ final class Preferences {
     var folderScopedStateMigrated: Bool {
         get { defaults.bool(forKey: Key.folderScopedStateMigrated.rawValue) }
         set { defaults.set(newValue, forKey: Key.folderScopedStateMigrated.rawValue) }
-    }
-
-    /// Favorited tracks — file paths, the same "currency" as `libraryOrder` and
-    /// playlists. Unordered in spirit (stored as an array only because
-    /// UserDefaults has no Set); missing files are simply ignored on lookup.
-    var favorites: [String] {
-        get { defaults.array(forKey: Key.favorites.rawValue) as? [String] ?? [] }
-        set { defaults.set(newValue, forKey: Key.favorites.rawValue) }
-    }
-
-    /// Whether the library list is currently filtered to favorites only. Persisted
-    /// so the filter survives relaunch, like the browse `libraryView`.
-    var favoritesFilter: Bool {
-        get { defaults.bool(forKey: Key.favoritesFilter.rawValue) }
-        set { defaults.set(newValue, forKey: Key.favoritesFilter.rawValue) }
     }
 
     /// The pre-scoping global manual order. Read once by `LibraryScopeMigration`

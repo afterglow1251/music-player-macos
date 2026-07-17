@@ -18,11 +18,30 @@ final class FavoritesStore: ObservableObject {
 
     private let prefs: Preferences
 
+    /// The library folder these favorites belong to. A favorite is a path into one
+    /// folder, so — like playlists — it's stored per folder and only ever consulted
+    /// alongside the folder holding the file.
+    private(set) var folder: URL
+
     /// `prefs` is injectable so tests can use an isolated UserDefaults suite.
     init(prefs: Preferences = Preferences()) {
         self.prefs = prefs
-        paths = Set(prefs.favorites)
-        filterActive = prefs.favoritesFilter
+        self.folder = MusicLibrary.resolveFolder(prefs: prefs)
+        load()
+    }
+
+    /// Follow the library to a different folder: swap in that folder's favorites.
+    /// Nothing needs saving first — every mutation already persisted itself under
+    /// the folder it happened in.
+    func setFolder(_ newFolder: URL) {
+        guard newFolder.standardizedFileURL.path != folder.standardizedFileURL.path else { return }
+        folder = newFolder
+        load()
+    }
+
+    private func load() {
+        paths = Set(prefs.favorites(for: folder))
+        filterActive = prefs.favoritesFilter(for: folder)
     }
 
     func isFavorite(_ path: String) -> Bool { paths.contains(path) }
@@ -34,7 +53,7 @@ final class FavoritesStore: ObservableObject {
         } else {
             paths.insert(path)
         }
-        prefs.favorites = Array(paths)
+        prefs.setFavorites(Array(paths), for: folder)
     }
 
     /// Favorite or unfavorite many paths at once, persisting a single time — the
@@ -42,13 +61,13 @@ final class FavoritesStore: ObservableObject {
     func setFavorite(_ batch: Set<String>, to favorite: Bool) {
         guard !batch.isEmpty else { return }
         if favorite { paths.formUnion(batch) } else { paths.subtract(batch) }
-        prefs.favorites = Array(paths)
+        prefs.setFavorites(Array(paths), for: folder)
     }
 
     /// Turn the "favorites only" filter on or off. Persisted so it survives relaunch.
     func setFilter(_ on: Bool) {
         guard on != filterActive else { return }
         filterActive = on
-        prefs.favoritesFilter = on
+        prefs.setFavoritesFilter(on, for: folder)
     }
 }
