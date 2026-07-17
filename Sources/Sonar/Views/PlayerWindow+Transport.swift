@@ -120,13 +120,20 @@ extension PlayerWindow {
     }
 
     /// The "Playing from <source>" strip above the title. Dancing bars + a muted
-    /// caption naming the live source, and clicking it jumps the list to that
-    /// source — so the playing playlist is always findable, never lost among the
-    /// tabs. Magenta bars here (no coloured fill to clash with) keep the same
-    /// "this is the playing source" language as the source tabs.
+    /// caption naming the live source, and clicking it lands on the playing track
+    /// inside that source — so the track is always findable, never lost among the
+    /// tabs or scrolled away. Magenta bars here (no coloured fill to clash with)
+    /// keep the same "this is the playing source" language as the source tabs.
+    ///
+    /// This is the *only* jump affordance. A "Now playing" pill in the list header
+    /// used to offer the same thing whenever the row scrolled out of view, which
+    /// meant two controls for one job — and the pill needed a whole geometry
+    /// pipeline (a marker behind the row, viewport measuring, deferred reports) to
+    /// work out when to exist. This label is already on screen whenever a track is
+    /// loaded, so it can simply always be there.
     private func playingFromLabel(_ name: String) -> some View {
         Button {
-            selectSource(controller.playingSourceID)
+            goToCurrentTrack()
         } label: {
             HStack(spacing: 5) {
                 NowPlayingBars(color: Theme.logo,

@@ -65,11 +65,6 @@ extension PlayerWindow {
                 Text("\(controller.library.tracks.count)")
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
-                // Contextual "jump to the playing track" — only while it's off-screen.
-                if currentTrackInSource, showNowPlayingPill {
-                    nowPlayingPill
-                        .transition(.opacity)
-                }
                 Spacer()
                 if !controller.library.tracks.isEmpty {
                     viewMenu
@@ -98,43 +93,43 @@ extension PlayerWindow {
         .frame(height: 24)
         .padding(.horizontal, 10)
         .padding(.top, 8).padding(.bottom, 4)
-        .animation(.easeInOut(duration: 0.2), value: showNowPlayingPill)
     }
 
-    /// Scroll the track list to the currently-playing track and highlight it. First
-    /// clears anything that would hide it — an active search, the favorites filter,
-    /// or a selected playlist that doesn't contain it — then triggers the scroll.
-    private func goToCurrentTrack() {
-        guard let current = controller.currentTrack else { return }
+    /// Land on the currently-playing track: clear anything that would hide it — an
+    /// active search, the favorites filter, a source that doesn't hold it — then
+    /// scroll it into the middle of the list. Driven by the "Playing from" label.
+    func goToCurrentTrack() {
+        // Nothing to land on if the track isn't in the library: it's playing on out
+        // of a folder we've since been pointed away from, so no list holds a row for
+        // it and the scroll below would resolve against nothing and quietly do
+        // nothing. The label hides itself in that case; this is the backstop.
+        guard currentTrackInLibrary else { return }
         if searchActive {
             withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
             searchText = ""
             searchFieldFocused = false
         }
         if controller.favorites.filterActive { controller.favorites.setFilter(false) }
-        if let playlist = selectedPlaylist, !controller.tracks(in: playlist).contains(current) {
+        // Land in the source the label names, even when the list on screen happens to
+        // hold the track too: the caption reads "Playing from <name>" and its tooltip
+        // "Go to <name>", so landing anywhere else would make both a lie.
+        if playingSourceTarget != selectedPlaylistID {
             suppressTopResetOnce = true   // we're about to centre on the track, not reset to top
-            selectSource(nil)
+            selectSource(playingSourceTarget)
         }
         scrollToCurrentNonce += 1
     }
 
-    /// Compact "Now playing" pill in the library header, shown only while the current
-    /// track is scrolled out of view; tapping it glides the list back to the track.
-    /// Kept deliberately quiet — a translucent accent chip rather than a solid fill —
-    /// so it reads as an offer, not a demand, in the muted header.
-    private var nowPlayingPill: some View {
-        Button { goToCurrentTrack() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "music.note").font(.system(size: 10, weight: .bold))
-                Text("Now playing").font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(accent)
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Capsule().fill(accent.opacity(0.15)))
-            .fixedSize()
-        }
-        .buttonStyle(PressableButtonStyle())
+    /// Where a tap on the "Playing from <name>" label should land, as a source id:
+    /// the playlist the track is playing from, or the library (nil) if that playlist
+    /// was since deleted or had the track removed from it. Keeps the jump honest
+    /// about the one thing it must deliver — a row for the playing track.
+    private var playingSourceTarget: Playlist.ID? {
+        guard let current = controller.currentTrack,
+              let id = controller.playingSourceID,
+              let playlist = controller.playlists.playlists.first(where: { $0.id == id }),
+              controller.tracks(in: playlist).contains(current) else { return nil }
+        return id
     }
 
     // MARK: Source switcher (Library + playlists)
@@ -151,6 +146,10 @@ extension PlayerWindow {
     /// playlist was since deleted, leaving nothing meaningful to point at).
     var playingSourceName: String? {
         guard controller.currentTrack != nil else { return nil }
+        // A track playing on out of a folder the library has been pointed away from
+        // has no source on screen to name — "Library" would mean the new folder,
+        // which is precisely where this track isn't. Say nothing rather than lie.
+        guard currentTrackInLibrary else { return nil }
         guard let id = controller.playingSourceID else { return "Library" }
         return controller.playlists.playlists.first { $0.id == id }?.name
     }
@@ -162,19 +161,15 @@ extension PlayerWindow {
         return controller.tracks(in: playlist)
     }
 
-    /// Whether the currently-playing track actually belongs to the list on screen.
-    /// The "Now playing" pill is an offer to jump *to that track inside this list*,
-    /// so it must never appear in a source that doesn't hold it. This is the root
-    /// gate the pill was missing: its geometry signal (a marker behind the current
-    /// row) can't tell "scrolled off-screen" from "not in this list" — both render
-    /// no marker, both read as not-visible — so without this check the pill stuck
-    /// on forever in any playlist that didn't contain the playing track.
-    var currentTrackInSource: Bool {
+    /// Whether the playing track is reachable in the UI at all: every list on
+    /// screen — the library and every playlist — is built out of the current
+    /// folder's files, so a track that isn't in the library appears nowhere. True
+    /// of a track that's playing on after the folder was switched out from under
+    /// it; playback deliberately survives the switch (`libraryFolderChanged`),
+    /// so the UI has to cope with an audible track it can't point at.
+    var currentTrackInLibrary: Bool {
         guard let current = controller.currentTrack else { return false }
-        // Library reaches every played track (playback scope is the library), and
-        // goToCurrentTrack clears any search/favorites filter before scrolling.
-        guard let playlist = selectedPlaylist else { return true }
-        return controller.tracks(in: playlist).contains { $0.id == current.id }
+        return controller.library.tracks.contains { $0.id == current.id }
     }
 
     /// Pills that switch the track list between the library and each playlist,
@@ -261,12 +256,6 @@ extension PlayerWindow {
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.3))
             }
-            // Same "jump to the playing track" offer as the library header — shown
-            // only while the current track is scrolled out of this playlist's view.
-            if currentTrackInSource, showNowPlayingPill {
-                nowPlayingPill
-                    .transition(.opacity)
-            }
             Spacer()
             if !playlistTracks.isEmpty {
                 Button { controller.playPlaylist(playlist) } label: {
@@ -295,7 +284,6 @@ extension PlayerWindow {
         .frame(height: 24)
         .padding(.horizontal, 10)
         .padding(.top, 8).padding(.bottom, 4)
-        .animation(.easeInOut(duration: 0.2), value: showNowPlayingPill)
     }
 
     // MARK: Source actions
@@ -303,14 +291,8 @@ extension PlayerWindow {
     func selectSource(_ id: Playlist.ID?) {
         if renamingPlaylist && id != renameTargetID { cancelRename() }
         // Switch instantly: animating a full header swap (LIBRARY ↔ playlist)
-        // interpolates two different layouts and stutters. The pill highlight
+        // interpolates two different layouts and stutters. The tab highlight
         // animates on its own; the list content just swaps cleanly.
-        // Hide the pill across a real source switch: the old list's "off-screen"
-        // must not leak into the new header for the frame before the new layout
-        // reports back (the report re-shows it if the row is genuinely out of
-        // view). Same-source clicks keep the pill — the preference value won't
-        // change, so no report would come to restore it.
-        if id != selectedPlaylistID { showNowPlayingPill = false; pillShowToken += 1 }
         // Remember the outgoing source's offset HERE, before mutating the id:
         // by the time onChange(of: selectedPlaylistID) fires, SwiftUI has already
         // swapped the list content, and the offset may have been clamped against

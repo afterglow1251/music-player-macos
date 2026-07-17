@@ -2,22 +2,6 @@ import SwiftUI
 import AppKit
 
 extension PlayerWindow {
-    /// A zero-size marker placed behind the currently-playing row: it emits whether
-    /// that row sits inside the list viewport (a Bool, so it only flips at the edge —
-    /// see CurrentRowVisibleKey). Absent for non-current rows, so an off-screen
-    /// current row (not rendered by the lazy stack) reads as not visible.
-    @ViewBuilder
-    private func currentRowMarker(for track: Track) -> some View {
-        if track == controller.currentTrack {
-            GeometryReader { geo in
-                let f = geo.frame(in: .named("libScroll"))
-                let visible = libViewportHeight > 0 && f.maxY > 0 && f.minY < libViewportHeight
-                Color.clear.preference(key: CurrentRowVisibleKey.self,
-                                       value: CurrentRowReport(source: selectedPlaylistID, visible: visible))
-            }
-        }
-    }
-
     /// Compact "UP NEXT" header shown at the top of the track list when queued.
     private var queueHeader: some View {
         HStack(spacing: 8) {
@@ -138,14 +122,6 @@ extension PlayerWindow {
                     Color.clear.frame(height: 8).id(Self.listBottomAnchorID)
                 }
                 .padding(.horizontal, 6).padding(.vertical, 6)
-                // Baseline "current row not visible" report from this source's
-                // layout. The row marker ORs its "visible" on top; with no marker
-                // rendered (row filtered out or far off-screen in the lazy stack)
-                // this still guarantees a report tagged with the current source.
-                .background {
-                    Color.clear.preference(key: CurrentRowVisibleKey.self,
-                                           value: CurrentRowReport(source: selectedPlaylistID, visible: false))
-                }
                 .coordinateSpace(.named("reorder"))
                 // The floating copy of the dragged row. Drawn as an overlay of
                 // the scroll *content* (same origin as the "reorder" space), so
@@ -160,48 +136,10 @@ extension PlayerWindow {
             .coordinateSpace(.named("libScroll"))
             .frame(height: fixedHeight)
             .frame(maxHeight: fixedHeight == nil ? .infinity : nil)
-            // Measure the viewport height so a row can tell whether it's on screen.
-            .background {
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear { libViewportHeight = geo.size.height }
-                        .onChange(of: geo.size.height) { _, h in libViewportHeight = h }
-                }
-            }
-            // The pill state comes straight from the layout's own report — no
-            // timers. The source tag rejects stale reports from the outgoing
-            // list during a switch; the new list's report (guaranteed by the
-            // baseline emitter, even off-screen → off-screen) then flips the
-            // pill exactly when the new layout has spoken.
-            .onPreferenceChange(CurrentRowVisibleKey.self) { report in
-                guard let report, report.source == selectedPlaylistID else { return }
-                if report.visible || !currentTrackInSource {
-                    // Row on screen, or the playing track isn't in this list at all
-                    // → no pill. Hide now and invalidate any pending "show".
-                    pillShowToken += 1
-                    showNowPlayingPill = false
-                } else {
-                    // Row reported off screen. Don't turn the pill on this instant:
-                    // a source switch settles over a couple of layout passes (offset
-                    // restore + the lazy stack materialising the current row's
-                    // marker), and the baseline "not visible" often lands one pass
-                    // before the marker's "visible" that will keep the pill hidden.
-                    // Turning on immediately would flash the pill for that one frame.
-                    // Defer the show by a runloop; a "visible" report arriving first
-                    // bumps the token and cancels it. Genuine off-screen rows (no
-                    // marker follows) still show, just imperceptibly later.
-                    pillShowToken += 1
-                    let token = pillShowToken
-                    DispatchQueue.main.async {
-                        guard pillShowToken == token, controller.currentTrack != nil else { return }
-                        showNowPlayingPill = true
-                    }
-                }
-            }
             // Keep the cursor on the playing track: when playback advances (auto-
             // advance, next/prev), move the selection to it so the outline never
-            // lingers on the previous row. No scroll here — the "Now playing" pill
-            // already offers a jump when the current track is off-screen.
+            // lingers on the previous row. No scroll here — the "Playing from"
+            // label offers the jump whenever you want it.
             .onChange(of: controller.currentTrack) { _, track in
                 trackSelection.followPlayback(to: track)
             }
@@ -380,7 +318,6 @@ extension PlayerWindow {
                                       frames: rowFrames,
                                       enabled: reorderID != nil,
                                       sectionActive: !dragIsQueueItem))
-        .background { currentRowMarker(for: track) }
     }
 
     /// One row inside a playlist. Plays through the playlist as its scope,
@@ -426,7 +363,6 @@ extension PlayerWindow {
                                       cursorY: dragCursorY, draggedFrame: draggedFrame,
                                       frames: rowFrames,
                                       sectionActive: !dragIsQueueItem))
-        .background { currentRowMarker(for: track) }
     }
 
     private func groupHeader(_ section: LibrarySection) -> some View {

@@ -13,9 +13,6 @@ struct PlayerWindow: View {
     @State var fsLeftHeight: CGFloat = 400   // measured left-column height (fullscreen)
     @State var scrollToCurrentNonce = 0      // bump to scroll the list to the current track
     @State var jumpGeneration = 0            // invalidates a pending "jump to current track" when the source changes
-    @State var showNowPlayingPill = false    // "playing row is off-screen", from the list's layout report
-    @State var pillShowToken = 0             // coalesces "show the pill" across a source switch's transient reports
-    @State var libViewportHeight: CGFloat = 0 // measured list viewport height
     /// The keyboard/selection model (cursor, ⇧-anchor, multi-selection,
     /// explicitness) as one value-type reducer — a single `@State`, so it
     /// invalidates the same way the four separate `@State` vars used to.
