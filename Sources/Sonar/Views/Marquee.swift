@@ -14,6 +14,11 @@ struct MarqueeText: View {
     /// (e.g. the menu-bar panel's `.semibold` title) instead of only bold/regular.
     var weight: Font.Weight? = nil
     var color: Color = .white
+    /// Optional trailing segment in its own colour, scrolling as part of the same
+    /// line — e.g. "Video Title  ·  Current Chapter", the chapter tinted. Empty by
+    /// default, so plain titles are unaffected.
+    var suffix: String = ""
+    var suffixColor: Color = .white
     var speed: Double = 35            // points per second
     /// Freezes the scroll — set while the host window is occluded/minimized so
     /// the per-frame TimelineView doesn't animate for nobody.
@@ -25,7 +30,7 @@ struct MarqueeText: View {
     private var uiFont: Font { .system(size: fontSize, weight: resolvedWeight) }
 
     private var textWidth: CGFloat {
-        (text as NSString).size(withAttributes: [.font: nsFont]).width
+        ((text + suffix) as NSString).size(withAttributes: [.font: nsFont]).width
     }
     private var lineHeight: CGFloat { ceil(nsFont.ascender - nsFont.descender) + 2 }
 
@@ -57,7 +62,10 @@ struct MarqueeText: View {
     }
 
     private var label: some View {
-        Text(text).font(uiFont).foregroundStyle(color).lineLimit(1).fixedSize()
+        (Text(text).foregroundColor(color) + Text(suffix).foregroundColor(suffixColor))
+            .font(uiFont)
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private var edgeFade: some View {

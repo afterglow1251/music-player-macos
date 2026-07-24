@@ -65,9 +65,11 @@ extension PlayerWindow {
             // Title line: click the title to copy it; a YouTube-sourced track also
             // reveals an "open on YouTube" link on hover, tucked after the title.
             HStack(spacing: 6) {
-                MarqueeText(text: nowPlayingTitle, fontSize: 15, bold: true, color: .white,
-                            paused: !windowOcclusion.isVisible)
-                    .copyOnClick(nowPlayingTitle, help: "Click to copy title", enabled: track != nil)
+                // For a chaptered mix this follows the clock and shows the current
+                // section (the song), not the long video title.
+                NowPlayingTitle(clock: engine.clock, track: track,
+                                isScrubbing: isScrubbing, scrubTime: scrubTime,
+                                paused: !windowOcclusion.isVisible)
                 if let youtubeURL = track?.youtubeURL {
                     Button { openInBrowser(youtubeURL) } label: {
                         Image(systemName: "arrow.up.forward.square")
@@ -172,6 +174,7 @@ extension PlayerWindow {
     var positionSlider: some View {
         WaveformSeekBar(clock: engine.clock, waveforms: controller.waveforms,
                         engine: engine, accent: accent,
+                        chapters: controller.currentTrack?.chapters ?? [],
                         isScrubbing: $isScrubbing, scrubTime: $scrubTime, seekHoverX: $seekHoverX)
     }
 
@@ -361,10 +364,6 @@ extension PlayerWindow {
     private var nowPlayingArtist: String {
         guard let track = controller.currentTrack, !track.artist.isEmpty else { return "SONAR" }
         return track.artist
-    }
-
-    private var nowPlayingTitle: String {
-        controller.currentTrack?.displayTitle ?? "No track playing"
     }
 
     private func openFile() {

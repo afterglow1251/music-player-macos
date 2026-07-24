@@ -14,6 +14,9 @@ struct WaveformSeekBar: View {
     @ObservedObject var waveforms: WaveformStore
     let engine: AudioEngine
     let accent: Color
+    /// Chapter markers for the loaded track (empty for the common single-song
+    /// case). Drawn as dividers over the waveform; a click near one snaps to it.
+    var chapters: [Chapter] = []
     @Binding var isScrubbing: Bool
     @Binding var scrubTime: TimeInterval
     @Binding var seekHoverX: CGFloat?
@@ -57,11 +60,15 @@ struct WaveformSeekBar: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
+            // Chapter boundaries: hidden while idle so the waveform reads clean,
+            // fading in only while the bar is hovered/scrubbed — enough to aim the
+            // magnet at, without permanently cutting the wave into blocks.
+            .overlay { chapterDividers(width: width, duration: duration) }
             // Hover anywhere to preview the time at that position.
             .overlay {
                 if let x = seekHoverX, duration > 0 {
                     let frac = min(max(x / width, 0), 1)
-                    TooltipLabel(text: clockTimeString(frac * duration))
+                    TooltipLabel(text: hoverLabel(at: frac * duration))
                         .position(x: min(max(x, 24), width - 24), y: -18)
                         .allowsHitTesting(false)
                 }
@@ -80,12 +87,13 @@ struct WaveformSeekBar: View {
                         guard duration > 0 else { return }
                         scrollSeek.cancel()   // the drag owns the scrub now
                         isScrubbing = true
-                        scrubTime = min(max(value.location.x / width, 0), 1) * duration
+                        // Snap live, so the playhead visibly magnetizes to a nearby
+                        // boundary as you press/drag near it — not just on release.
+                        scrubTime = snappedTime(atX: value.location.x, duration: duration, width: width)
                     }
                     .onEnded { value in
                         guard duration > 0 else { return }
-                        let target = min(max(value.location.x / width, 0), 1) * duration
-                        engine.seek(to: target)
+                        engine.seek(to: snappedTime(atX: value.location.x, duration: duration, width: width))
                         isScrubbing = false
                     }
             )
@@ -135,6 +143,63 @@ struct WaveformSeekBar: View {
         return path
     }
 
+    /// Thin dividers at each chapter boundary, drawn over the waveform but shown
+    /// only while the bar is hovered or scrubbed (`seekHoverX != nil`) — a soft
+    /// fade in/out. Nothing to draw for an unchaptered track.
+    @ViewBuilder
+    private func chapterDividers(width: CGFloat, duration: TimeInterval) -> some View {
+        if duration > 0, !chapters.isEmpty {
+            Canvas { context, size in
+                for chapter in chapters {
+                    let frac = chapter.start / duration
+                    guard frac > 0.003, frac < 0.997 else { continue }
+                    let x = CGFloat(frac) * size.width
+                    context.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: size.height)),
+                                 with: .color(.white.opacity(0.45)))
+                }
+            }
+            .allowsHitTesting(false)
+            .opacity(seekHoverX != nil ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: seekHoverX != nil)
+        }
+    }
+
+    /// The section covering `time`, if the track has chapters — the last one that
+    /// has started by then.
+    private func chapter(at time: TimeInterval) -> Chapter? {
+        chapters.last { $0.start <= time + 0.001 }
+    }
+
+    /// The seek time for a press at horizontal position `x`, magnetized to a
+    /// chapter boundary within a comfortable pixel radius — so aiming at a divider
+    /// (or landing a touch either side) lands exactly on that section. Pixel-based,
+    /// not time-based, so the pull feels the same on a 3-minute song and a 3-hour
+    /// mix. No chapter in range → the raw position under the cursor.
+    private func snappedTime(atX x: CGFloat, duration: TimeInterval, width: CGFloat) -> TimeInterval {
+        let raw = min(max(x / width, 0), 1) * duration
+        guard !chapters.isEmpty, width > 0 else { return raw }
+        let tolerance: CGFloat = 12
+        var nearest: (distance: CGFloat, start: TimeInterval)?
+        for chapter in chapters {
+            let boundaryX = CGFloat(chapter.start / duration) * width
+            let distance = abs(boundaryX - x)
+            if distance <= tolerance, nearest == nil || distance < nearest!.distance {
+                nearest = (distance, chapter.start)
+            }
+        }
+        return nearest?.start ?? raw
+    }
+
+    /// The hover tooltip's text: the time, prefixed with the section name when the
+    /// track is chaptered so a mix reads "Song — 12:04" as you scan it.
+    private func hoverLabel(at time: TimeInterval) -> String {
+        let clock = clockTimeString(time)
+        if let title = chapter(at: time)?.title, !title.isEmpty {
+            return "\(title)  ·  \(clock)"
+        }
+        return clock
+    }
+
     /// Reduce `peaks` to exactly `count` columns by taking the max over each
     /// column's source range (so transients survive downsampling). Returns the
     /// input unchanged when it already matches, or empty when there's no data.
@@ -172,6 +237,41 @@ private final class BarsCache {
         self.version = version
         self.columns = columns
         self.height = height
+    }
+}
+
+/// The now-playing title line. Shows the track's own title, and — for a chaptered
+/// track (a long mix with per-song timestamps) — appends the current section's
+/// name after a "·", tinted, so you see both "Mix Title · Current Song" on one
+/// scrolling line. Observing the clock here keeps the ~10 Hz chapter updates scoped
+/// to this one line rather than re-rendering the whole window.
+struct NowPlayingTitle: View {
+    @ObservedObject var clock: PlaybackClock
+    let track: Track?
+    let isScrubbing: Bool
+    let scrubTime: TimeInterval
+    let paused: Bool
+
+    private var title: String {
+        track?.displayTitle ?? "No track playing"
+    }
+
+    /// The "  ·  Current Chapter" suffix, or empty when the track isn't chaptered
+    /// or the current section has no title.
+    private var chapterSuffix: String {
+        guard let track, !track.chapters.isEmpty else { return "" }
+        let time = isScrubbing ? scrubTime : clock.currentTime
+        if let name = track.chapters.last(where: { $0.start <= time + 0.001 })?.title,
+           !name.isEmpty {
+            return "  ·  \(name)"
+        }
+        return ""
+    }
+
+    var body: some View {
+        MarqueeText(text: title, fontSize: 15, bold: true, color: .white,
+                    suffix: chapterSuffix, suffixColor: Theme.logo, paused: paused)
+            .copyOnClick(title, help: "Click to copy title", enabled: track != nil)
     }
 }
 

@@ -123,6 +123,10 @@ final class Downloader: ObservableObject {
         let args = ["-f", "bestaudio[ext=m4a]/bestaudio",
                     "-x", "--audio-format", "m4a", "--audio-quality", "0",
                     "--no-playlist", "--embed-thumbnail", "--add-metadata",
+                    // Carry over the video's chapters (YouTube builds them from the
+                    // description's timestamps) so a long mix stays navigable
+                    // section-by-section. No-op when the source has none.
+                    "--embed-chapters",
                     // Fill the artist tag from the channel when the video has no
                     // artist of its own (keeps a real artist tag where present).
                     "--parse-metadata", "%(artist,uploader)s:%(artist)s",

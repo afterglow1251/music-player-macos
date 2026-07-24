@@ -1,6 +1,19 @@
 import Foundation
 import AVFoundation
 
+/// A named section within a single audio file. YouTube derives these "chapters"
+/// from the timestamps in a video's description, and yt-dlp embeds them into the
+/// container (`--embed-chapters`); AVFoundation reads them straight back. They let
+/// a long mashup / mix be navigated section-by-section — jump to the right song,
+/// see which one is playing — without ever splitting the file.
+struct Chapter: Hashable, Sendable {
+    /// The section's name (the song title in a mix). Possibly empty if the source
+    /// tagged a boundary with no title.
+    let title: String
+    /// Seconds from the start of the file where this section begins.
+    let start: TimeInterval
+}
+
 /// One audio file in the library, with its ID3 metadata already read.
 ///
 /// Artwork is kept as raw `Data` (not `NSImage`) so `Track` stays `Sendable`
@@ -28,6 +41,11 @@ struct Track: Identifiable, Hashable, Sendable {
     /// falling back to the `[id]` suffix in the file name. nil for hand-added /
     /// non-YouTube files.
     var videoID: String?
+
+    /// Chapter markers embedded in the file, in start order. Empty for the common
+    /// case (a single song, or a video whose uploader set no timestamps). When
+    /// present, the seek bar shows dividers and the player names the live section.
+    var chapters: [Chapter] = []
 
     var url: URL { id }
 
@@ -137,10 +155,38 @@ extension Track {
         }
         if videoID == nil { videoID = filenameVideoID(url) }
 
+        let chapters = await loadChapters(from: asset)
+
         return Track(id: url, title: title, artist: artist, album: album,
                      duration: duration, artworkData: artworkData,
                      year: year, trackNumber: trackNumber, dateAdded: dateAdded,
-                     videoID: videoID)
+                     videoID: videoID, chapters: chapters)
+    }
+
+    /// Read embedded chapter markers (title + start), sorted by start. Empty when
+    /// the file carries none — the overwhelmingly common case, so this stays a
+    /// single cheap call that returns nothing rather than a per-item load.
+    private static func loadChapters(from asset: AVURLAsset) async -> [Chapter] {
+        // Ask for whatever languages the file actually tags its chapters in (yt-dlp
+        // often writes them as undetermined), falling back to the system's preferred
+        // languages when the file advertises none — otherwise `bestMatching…` has
+        // nothing to match and returns empty even when chapters are present.
+        let locales = (try? await asset.load(.availableChapterLocales)) ?? []
+        let languages = locales.isEmpty ? Locale.preferredLanguages : locales.map(\.identifier)
+        guard let groups = try? await asset.loadChapterMetadataGroups(
+                bestMatchingPreferredLanguages: languages) else {
+            return []
+        }
+        var chapters: [Chapter] = []
+        for group in groups {
+            let start = CMTimeGetSeconds(group.timeRange.start)
+            guard start.isFinite else { continue }
+            let titleItem = AVMetadataItem.metadataItems(
+                from: group.items, filteredByIdentifier: .commonIdentifierTitle).first
+            let title = (try? await titleItem?.load(.stringValue)) ?? nil
+            chapters.append(Chapter(title: title ?? "", start: max(0, start)))
+        }
+        return chapters.sorted { $0.start < $1.start }
     }
 
     /// The leading 4-digit year out of a tag value like "2011" or "2011-05-03".
