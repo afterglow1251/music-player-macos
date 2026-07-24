@@ -51,19 +51,38 @@ struct WaveformSeekBar: View {
                 // the played span in accent through a clip rect. Two fills, no
                 // per-tick path building — the 10 Hz redraw stays nearly free.
                 let bars = barsPath(size: size)
-                context.fill(bars, with: .color(muted))
                 let playedWidth = CGFloat(progress) * size.width
-                if playedWidth > 0 {
-                    context.clip(to: Path(CGRect(x: 0, y: 0, width: playedWidth, height: size.height)))
-                    context.fill(bars, with: .color(accent))
+
+                // Paint the whole waveform (muted, then accent over the played span)
+                // into a given context — reused at full and dimmed opacity.
+                func paintWaveform(into ctx: GraphicsContext) {
+                    ctx.fill(bars, with: .color(muted))
+                    if playedWidth > 0 {
+                        var played = ctx
+                        played.clip(to: Path(CGRect(x: 0, y: 0, width: playedWidth, height: size.height)))
+                        played.fill(bars, with: .color(accent))
+                    }
+                }
+
+                // Hovering a chaptered track spotlights the section under the
+                // cursor: dim the whole wave, then repaint just that section at full
+                // brightness. No lines, no cuts — the wave stays whole, and you see
+                // exactly which song a click would land on.
+                if let hoverX = seekHoverX, duration > 0, !chapters.isEmpty {
+                    var dimmed = context
+                    dimmed.opacity = 0.3
+                    paintWaveform(into: dimmed)
+
+                    let (x0, x1) = hoveredSectionX(at: hoverX, width: size.width, duration: duration)
+                    var section = context
+                    section.clip(to: Path(CGRect(x: x0, y: 0, width: x1 - x0, height: size.height)))
+                    paintWaveform(into: section)
+                } else {
+                    paintWaveform(into: context)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
-            // Chapter boundaries: hidden while idle so the waveform reads clean,
-            // fading in only while the bar is hovered/scrubbed — enough to aim the
-            // magnet at, without permanently cutting the wave into blocks.
-            .overlay { chapterDividers(width: width, duration: duration) }
             // Hover anywhere to preview the time at that position.
             .overlay {
                 if let x = seekHoverX, duration > 0 {
@@ -143,25 +162,15 @@ struct WaveformSeekBar: View {
         return path
     }
 
-    /// Thin dividers at each chapter boundary, drawn over the waveform but shown
-    /// only while the bar is hovered or scrubbed (`seekHoverX != nil`) — a soft
-    /// fade in/out. Nothing to draw for an unchaptered track.
-    @ViewBuilder
-    private func chapterDividers(width: CGFloat, duration: TimeInterval) -> some View {
-        if duration > 0, !chapters.isEmpty {
-            Canvas { context, size in
-                for chapter in chapters {
-                    let frac = chapter.start / duration
-                    guard frac > 0.003, frac < 0.997 else { continue }
-                    let x = CGFloat(frac) * size.width
-                    context.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: size.height)),
-                                 with: .color(.white.opacity(0.45)))
-                }
-            }
-            .allowsHitTesting(false)
-            .opacity(seekHoverX != nil ? 1 : 0)
-            .animation(.easeInOut(duration: 0.15), value: seekHoverX != nil)
-        }
+    /// The pixel span `[x0, x1)` of the chapter under horizontal position `x` — its
+    /// start to the next chapter's start (or the end). Used to spotlight the hovered
+    /// section. Assumes the track is chaptered (callers guard `!chapters.isEmpty`).
+    private func hoveredSectionX(at x: CGFloat, width: CGFloat, duration: TimeInterval) -> (CGFloat, CGFloat) {
+        let time = min(max(x / width, 0), 1) * duration
+        let index = chapters.lastIndex { $0.start <= time + 0.001 } ?? 0
+        let start = chapters[index].start
+        let end = index + 1 < chapters.count ? chapters[index + 1].start : duration
+        return (CGFloat(start / duration) * width, CGFloat(end / duration) * width)
     }
 
     /// The section covering `time`, if the track has chapters — the last one that
